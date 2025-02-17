@@ -3,6 +3,7 @@ const cors = require('cors');
 const { config } = require('./config/env');
 const { connectDB } = require('./config/database');
 const { errorHandler } = require('./middleware/error');
+const { OAuth2Client } = require('google-auth-library');
 
 // Route imports
 const auth = require('./routes/auth');
@@ -13,6 +14,8 @@ const calls = require('./routes/calls');
 const settings = require('./routes/settings');
 const analytics = require('./routes/analytics');
 const dashboard = require('./routes/dashboard');
+const speechToText = require('./routes/speech-to-text');
+const vertex = require('./routes/vertex');
 
 // Connect to database
 connectDB();
@@ -34,6 +37,8 @@ app.use('/api/calls', calls);
 app.use('/api/settings', settings);
 app.use('/api/analytics', analytics);
 app.use('/api/dashboard', dashboard);
+app.use('/api/speechToText', speechToText);
+app.use('/api/vertex', vertex);
 
 // Error handler
 app.use(errorHandler);
