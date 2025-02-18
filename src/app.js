@@ -13,6 +13,7 @@ const calls = require('./routes/calls');
 const settings = require('./routes/settings');
 const analytics = require('./routes/analytics');
 const dashboard = require('./routes/dashboard');
+const zoho = require('./routes/zoho');
 
 // Connect to database
 connectDB();
@@ -34,6 +35,8 @@ app.use('/api/calls', calls);
 app.use('/api/settings', settings);
 app.use('/api/analytics', analytics);
 app.use('/api/dashboard', dashboard);
+app.use('/api/zoho', zoho);
+
 
 // Error handler
 app.use(errorHandler);
