@@ -38,6 +38,10 @@ app.use('/api/dashboard', dashboard);
 app.use('/api/zoho', zoho);
 
 
+app.use('/', (req, res) => {
+  res.status(200).json({ message: 'Testing route is working!' });
+});
+
 // Error handler
 app.use(errorHandler);
 
