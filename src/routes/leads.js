@@ -9,9 +9,6 @@ const {
   deleteLead,
   analyzeLead,
   generateScript,
-  getLeadsZoho,
-  storeLeadsZoho,
-  getAllLeadsFromZoho,
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -31,6 +28,7 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
 
     const results = [];
     const buffer = req.file.buffer.toString("utf-8").replace(/^\uFEFF/, "").trim();
+
     // Détection automatique du séparakteur
     const separator = buffer.includes(";") ? ";" : ",";
     console.log(`Utilisation du séparateur : '${separator}'`);
@@ -98,14 +96,10 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
   }
 });
 
-router.route("/leads-zoho").get(getLeadsZoho);
-router.route("/leads").get(getLeads);
-router.route("/all-leads-zoho").get(getAllLeadsFromZoho);
 
 router.route("/").get(getLeads).post(createLead);
 router.route("/:id").get(getLead).put(updateLead).delete(deleteLead);
 router.route("/:id/analyze").post(analyzeLead);
 router.route("/:id/generate-script").post(generateScript);
-router.route("/leads-zoho").post(storeLeadsZoho);
 
 module.exports = router;
