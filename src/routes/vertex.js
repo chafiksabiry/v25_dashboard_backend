@@ -12,4 +12,7 @@ router.post('/audio/summarize', vertexController.getAudioSummary);
 // Get the transcription of an audio 
 router.post('/audio/transcribe', vertexController.getAudioTranscription);
 
+// Get the scoring of a call 
+router.post('/call/score', vertexController.getCallScoring);
+
 module.exports = router;
