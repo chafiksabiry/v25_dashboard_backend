@@ -1,5 +1,5 @@
-/* const { Call } = require('../models/Call');
-
+const { Call } = require('../models/Call');
+/*
 // @desc    Get all calls
 // @route   GET /api/calls
 // @access  Private
