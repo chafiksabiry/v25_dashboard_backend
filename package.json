@@ -25,6 +25,8 @@
     "open": "^10.1.0",
     "ovh": "^2.0.3",
     "path": "^0.12.7",
+    "csv-parser": "^3.2.0",
+    "express-session": "^1.18.1",
     "twilio": "^4.22.0"
   },
   "devDependencies": {

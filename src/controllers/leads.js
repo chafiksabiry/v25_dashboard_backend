@@ -1,21 +1,21 @@
-const { Lead } = require('../models/Lead');
+const { Lead } = require("../models/Lead");
 
 // @desc    Get all leads
 // @route   GET /api/leads
 // @access  Private
 exports.getLeads = async (req, res) => {
   try {
-    const leads = await Lead.find().populate('assignedTo');
+    const leads = await Lead.find().populate("assignedTo");
 
     res.status(200).json({
       success: true,
       count: leads.length,
-      data: leads
+      data: leads,
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -25,23 +25,23 @@ exports.getLeads = async (req, res) => {
 // @access  Private
 exports.getLead = async (req, res) => {
   try {
-    const lead = await Lead.findById(req.params.id).populate('assignedTo');
+    const lead = await Lead.findById(req.params.id).populate("assignedTo");
 
     if (!lead) {
       return res.status(404).json({
         success: false,
-        error: 'Lead not found'
+        error: "Lead not found",
       });
     }
 
     res.status(200).json({
       success: true,
-      data: lead
+      data: lead,
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -55,12 +55,12 @@ exports.createLead = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: lead
+      data: lead,
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -72,24 +72,24 @@ exports.updateLead = async (req, res) => {
   try {
     const lead = await Lead.findByIdAndUpdate(req.params.id, req.body, {
       new: true,
-      runValidators: true
+      runValidators: true,
     });
 
     if (!lead) {
       return res.status(404).json({
         success: false,
-        error: 'Lead not found'
+        error: "Lead not found",
       });
     }
 
     res.status(200).json({
       success: true,
-      data: lead
+      data: lead,
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -104,18 +104,18 @@ exports.deleteLead = async (req, res) => {
     if (!lead) {
       return res.status(404).json({
         success: false,
-        error: 'Lead not found'
+        error: "Lead not found",
       });
     }
 
     res.status(200).json({
       success: true,
-      data: {}
+      data: {},
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -130,31 +130,31 @@ exports.analyzeLead = async (req, res) => {
     if (!lead) {
       return res.status(404).json({
         success: false,
-        error: 'Lead not found'
+        error: "Lead not found",
       });
     }
 
     // Simulated AI analysis
     const analysis = {
       score: Math.floor(Math.random() * 30) + 70,
-      sentiment: Math.random() > 0.5 ? 'Positive' : 'Neutral'
+      sentiment: Math.random() > 0.5 ? "Positive" : "Neutral",
     };
 
     lead.metadata = {
       ...lead.metadata,
-      ai_analysis: analysis
+      ai_analysis: analysis,
     };
 
     await lead.save();
 
     res.status(200).json({
       success: true,
-      data: lead
+      data: lead,
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
@@ -170,24 +170,24 @@ exports.generateScript = async (req, res) => {
     if (!lead) {
       return res.status(404).json({
         success: false,
-        error: 'Lead not found'
+        error: "Lead not found",
       });
     }
 
     // Simulated script generation
     const script = {
       content: `Hello ${lead.name}, this is a ${type} script for ${lead.company}...`,
-      type
+      type,
     };
 
     res.status(200).json({
       success: true,
-      data: script
+      data: script,
     });
   } catch (err) {
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };

@@ -16,6 +16,7 @@ const analytics = require('./routes/analytics');
 const dashboard = require('./routes/dashboard');
 const speechToText = require('./routes/speech-to-text');
 const vertex = require('./routes/vertex');
+const zoho = require('./routes/zoho');
 
 // Connect to database
 connectDB();
@@ -39,6 +40,12 @@ app.use('/api/analytics', analytics);
 app.use('/api/dashboard', dashboard);
 app.use('/api/speechToText', speechToText);
 app.use('/api/vertex', vertex);
+app.use('/api/zoho', zoho);
+
+
+app.use('/', (req, res) => {
+  res.status(200).json({ message: 'Testing route is working!' });
+});
 
 // Error handler
 app.use(errorHandler);
