@@ -20,7 +20,15 @@ ENV ZOHO_API_URL=https://www.zohoapis.com/crm/v2/Leads
 ENV REACT_APP_URL=https://dashboard.harx.ai
 ENV BACKEND_URL=https://api-dashboard.harx.ai
 ENV SESSION_SECRET=2ad9bd79f6d7c91829f648bd5658c30d0c90c07270cb703d54dc76a3670763cb
-
+ENV QAUTH2_CLIENT_ID=606251928660-b1ehqmv6ui1bfbo0ejjbss18c7fhqa2d.apps.googleusercontent.com
+ENV QAUTH2_PROJECT_ID=harx-technologies-inc
+ENV QAUTH2_AUTH_URI=https://accounts.google.com/o/oauth2/auth
+ENV QAUTH2_TOKEN_URI=https://oauth2.googleapis.com/token
+ENV QAUTH2_AUTH_PROVIDER_X509_CERT_URL=https://www.googleapis.com/oauth2/v1/certs
+ENV QAUTH2_CLIENT_SECRET=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
+ENV QAUTH2_SCOPE=https://www.googleapis.com/auth/cloud-platform
+ENV GOOGLE_API_KEY=AIzaSyCHEKiraViKIrgvloZI-ZBIJqtDMeBuQD0
+ENV BUCKET_NAME=harx-audios-test
 
 EXPOSE 5005
 
