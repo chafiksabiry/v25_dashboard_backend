@@ -5,6 +5,7 @@ const path = require("path");
 const { Storage } = require('@google-cloud/storage');
 const { VertexAI } = require('@google-cloud/vertexai');
 const { generateCallScoringPrompt } = require('../prompts/call-scoring-prompt');
+const { generateCallPostActionsPrompt } = require('../prompts/call-action-plan');
 const { parseCleanJson } = require('../parsers/parse-call-scoring-result');
 
 
@@ -119,6 +120,35 @@ exports.getCallScoring = async (file_uri) => {
         //return response;
     } catch (error) {
         console.error("Error analyzing the audio:", error);
+        throw new Error("Audio analyzis failed");
+    }
+};
+
+//getCallPostActions
+exports.getCallPostActions = async (file_uri) => {
+    try {
+        const request = {
+            contents: [{
+                role: 'user', parts: [
+                    {
+                        "file_data": {
+                            "mime_type": "audio/wav", // we can change the mime_type after
+                            "file_uri": file_uri
+                        }
+                    },
+                    {
+                        "text": generateCallPostActionsPrompt()
+                    }
+                ]
+            }],
+        };
+        const result = await generativeVisionModel.generateContent(request);
+        const response = result.response;
+        console.log('Response: ', JSON.stringify(response));
+        return parseCleanJson(response.candidates[0].content.parts[0].text);
+        //return response;
+    } catch (error) {
+        console.error("Service : Error during generating follow-up actions:", error);
         throw new Error("Audio analyzis failed");
     }
 };

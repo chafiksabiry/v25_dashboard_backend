@@ -15,4 +15,7 @@ router.post('/audio/transcribe', vertexController.getAudioTranscription);
 // Get the scoring of a call 
 router.post('/call/score', vertexController.getCallScoring);
 
+// Get suggestions of follow-up actions
+router.post('/call/post-actions', vertexController.getCallPostActions);
+
 module.exports = router;
