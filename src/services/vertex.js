@@ -6,6 +6,7 @@ const { Storage } = require('@google-cloud/storage');
 const { VertexAI } = require('@google-cloud/vertexai');
 const { generateCallScoringPrompt } = require('../prompts/call-scoring-prompt');
 const { generateCallPostActionsPrompt } = require('../prompts/call-action-plan');
+const { generateAudioSummaryPrompt } = require('../prompts/call-summary-prompt');
 const { parseCleanJson } = require('../parsers/parse-call-scoring-result');
 
 
@@ -47,7 +48,7 @@ exports.getAudioSummary = async (file_uri) => {
                         }
                     },
                     {
-                        "text": "Please analyze this audio file and summarize the contents of the audio as bullet points"
+                        "text": generateAudioSummaryPrompt()
                     }
                 ]
             }],
@@ -58,7 +59,9 @@ exports.getAudioSummary = async (file_uri) => {
         }
         const aggregatedResponse = await streamingResp.response;
         console.log(aggregatedResponse.candidates[0].content);
-        return aggregatedResponse.candidates[0].content;
+        //return aggregatedResponse.candidates[0].content;
+        return parseCleanJson(aggregatedResponse.candidates[0].content.parts[0].text);
+
     } catch (error) {
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
