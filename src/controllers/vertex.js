@@ -47,3 +47,19 @@ exports.getCallScoring = async (req, res) => {
         res.status(500).json({ error: 'Internal Server Error' });
     }
 };
+
+// Get the scoring of a call 
+exports.getCallPostActions = async (req, res) => {
+    try {
+        const { file_uri } = req.body;
+
+        if (!file_uri) {
+            return res.status(400).json({ error: 'file_uri is required' });
+        }
+        const response = await vertexService.getCallPostActions(file_uri);
+        res.json(response);
+    } catch (error) {
+        console.error('Error during generating follow-up actions :', error);
+        res.status(500).json({ error: 'Internal Server Error' });
+    }
+};
