@@ -415,7 +415,7 @@ exports.endCall= async (req, res) => {
 
 exports.saveCallToDB = async (req, res) => {
   console.log("in the controller here");
-  const {CallSid,agentId,leadId} = req.body;
+  const {CallSid,agentId,leadId,call,cloudinaryrecord} = req.body;
 console.log("CallSid",CallSid);
   if (!CallSid) {
     return res.status(400).send('CallSid is required');
@@ -423,10 +423,44 @@ console.log("CallSid",CallSid);
 
   try {
     // Fetch the call details from the service
-    const callDetails = await twilioService.saveCallToDB(CallSid,agentId,leadId);
+    const callDetails = await twilioService.saveCallToDB(CallSid,agentId,leadId,call,cloudinaryrecord);
     res.json(callDetails);
   } catch (error) {
     console.error('Error in controller:', error);
     res.status(500).send('Error fetching call details');
+  }
+};
+
+
+exports.fetchRecording = async (req, res) => {
+  const { recordingUrl } = req.body;
+console.log("recordingUrl",recordingUrl);
+  try {
+    const recording = await twilioService.fetchTwilioRecording(recordingUrl);
+
+    if (!recording) {
+      return res.status(500).json({ message: 'Error fetching the recording' });
+    }
+
+    res.set('Content-Type', 'audio/mpeg');
+    res.send(recording);
+  } catch (error) {
+    console.error('Error in fetchRecording controller:', error);
+    res.status(500).json({ message: 'Error fetching the recording' });
+  }
+};
+
+exports.getCallDetails = async (req, res) => {
+  const { callSid } = req.body;
+
+  if (!callSid) {
+      return res.status(400).json({ success: false, error: "Missing callSid parameter" });
+  }
+
+  try {
+      const callDetails = await twilioService.getCallDetails(callSid);
+      return res.status(200).json({ success: true, data: callDetails });
+  } catch (error) {
+      return res.status(500).json({ success: false, error: error.message });
   }
 };

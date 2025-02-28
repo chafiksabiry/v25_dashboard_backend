@@ -14,12 +14,18 @@ const {
 } = require('../controllers/calls');
 
 const router = express.Router();
-
+console.log("router",router);
 //router.use(protect);
 
-router.route('/')
-  .get(getCalls)
-  .post(createCall);
+
+
+
+/* router.route('/')
+ .get(getCalls)
+  .post(createCall); */
+
+//router.get('/fetch-recording/:recordingUrl', callController.fetchRecording);
+ 
 
   router.get('/token', (req, res, next) => {
     console.log('Requête reçue sur la route');
@@ -29,7 +35,7 @@ router.route('/')
   router.post('/store-call', callController.saveCallToDB);
 
 
-router.route('/initiate')
+/* router.route('/initiate')
   .post(initiateCall);
 
 router.route('/:id')
@@ -43,7 +49,7 @@ router.route('/:id/notes')
   .post(addNote);
 
 router.route('/:id/quality-score')
-  .put(updateQualityScore);
+  .put(updateQualityScore); */
 
 // Route pour créer un Dialplan
 router.post('/dialplan', callController.createDialplan);
@@ -73,6 +79,13 @@ router.post('/hangup/:callSid', callController.hangUpCall);
 router.post('/end', callController.endCall);
 
 //router.get('/call-details', callController.getCallDetails);
+/* router.post('/fetch-recording/:recordingUrl', (req, res, next) => {
+  console.log('Requête reçue sur la route');
+  next();
+}, callController.fetchRecording);  */
 
+
+router.post('/fetch-recording', callController.fetchRecording);
+router.post('/call-details', callController.getCallDetails);
 
 module.exports = router;

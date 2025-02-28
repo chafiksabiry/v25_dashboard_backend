@@ -11,6 +11,8 @@ const mongoose = require('mongoose');
 const Call = mongoose.model('Call')
 const client = twilio(accountSid, authToken);
 const path = require("path"); 
+const fetch = require('node-fetch');
+
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
   api_key: process.env.CLOUDINARY_API_KEY,
@@ -35,31 +37,8 @@ console.log("call Fils details",callFils);
     if (recordings.length > 0) {
       const recordingSid = recordings[0].sid;
       const format = "mp3"; // Change to "wav" if you need WAV format
-      recordingUrl = `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Recordings/${recordingSid}.${format}`;
-
-      // File path to save the recording
-      recordingFilePath = path.join(__dirname, `recording-${recordingSid}.${format}`);
-
-      // Download the recording
-     /*  const response = await axios.get(recordingUrl, {
-        auth: {
-          username: process.env.TWILIO_ACCOUNT_SID,
-          password: process.env.TWILIO_AUTH_TOKEN,
-        },
-        responseType: "stream",
-      }); */
-      
-
-      // Save to local file
-     /*  const writer = fs.createWriteStream(recordingFilePath);
-      response.data.pipe(writer);
-
-      await new Promise((resolve, reject) => {
-        writer.on("finish", resolve);
-        writer.on("error", reject);
-      }); */
-
-      console.log(`✅ Recording : ${recordingFilePath}`);
+     recordingUrl = `https://api.twilio.com/2010-04-01/Accounts/${process.env.TWILIO_ACCOUNT_SID}/Recordings/${recordingSid}.${format}`;
+    
     }
 
     return {
@@ -150,27 +129,19 @@ console.log("childCalls",childCalls);
     throw new Error("Erreur lors de l'enregistrement de l'appel");
   }
 }; */
-const saveCallToDB = async (callSid, agentId, leadId) => {
+const saveCallToDB = async (callSid, agentId, leadId, call, cloudinaryrecord) => {
   try {
-    const callFromTwilio = await getCallDetails(callSid);
-    console.log("callFromTwilio", callFromTwilio);
-
-    // Vérifier si l'appel existe déjà
+  // Vérifier si l'appel existe déjà
     let existingCall = await Call.findOne({ sid: callSid });
-    let cloudinaryUrl = null;
-
-    // Vérifier et stocker l'enregistrement s'il existe
-    if (callFromTwilio.recordingUrl) {
-      cloudinaryUrl = await storeRecordsInCloudinary(callFromTwilio.recordingUrl);
-    }
+   // let cloudinaryUrl = null;
 
     if (existingCall) {
       // Mise à jour de l'appel existant
-      existingCall.status = callFromTwilio.status;
-      existingCall.duration = parseInt(callFromTwilio.duration) || 0;
-      existingCall.recording_url = callFromTwilio.recordingUrl; // Garder l'URL Twilio
-      existingCall.recording_url_cloudinary = cloudinaryUrl; // Ajouter l'URL Cloudinary
-      existingCall.childCalls[0] = callFromTwilio.ChildCallSid;
+      existingCall.status = call.status;
+      existingCall.duration = parseInt(call.duration) || 0;
+      existingCall.recording_url = call.recordingUrl; // Garder l'URL Twilio
+      existingCall.recording_url_cloudinary = cloudinaryrecord; // Ajouter l'URL Cloudinary
+      existingCall.childCalls[0] = call.ChildCallSid;
       existingCall.updatedAt = new Date();
 
       await existingCall.save();
@@ -181,17 +152,17 @@ const saveCallToDB = async (callSid, agentId, leadId) => {
       const newCall = new Call({
         agent: agentId,
         lead: leadId,
-        sid: callFromTwilio.ParentCallSid,
-        parentCallSid: callFromTwilio.ParentCallSid || null,
-        direction: callFromTwilio.direction,
-        status: callFromTwilio.status,
-        duration: parseInt(callFromTwilio.duration) || 0,
-        recording_url: callFromTwilio.recordingUrl, // Stocker l'URL Twilio
-        recording_url_cloudinary: cloudinaryUrl, // Stocker l'URL Cloudinary
-        startTime: callFromTwilio.startTime,
-        endTime: callFromTwilio.endTime,
-        childCalls: callFromTwilio.ChildCallSid,
-        createdAt: callFromTwilio.startTime,
+        sid: call.ParentCallSid,
+        parentCallSid: call.ParentCallSid || null,
+        direction: call.direction,
+        status: call.status,
+        duration: parseInt(call.duration) || 0,
+        recording_url: call.recordingUrl, // Stocker l'URL Twilio
+        recording_url_cloudinary: cloudinaryrecord, // Stocker l'URL Cloudinary
+        startTime: call.startTime,
+        endTime: call.endTime,
+        childCalls: call.ChildCallSid,
+        createdAt: call.startTime,
         updatedAt: new Date(),
       });
 
@@ -307,7 +278,7 @@ const hangUpCall = async(callSid) => {
   
 
   
-/*   const storeRecordsInCloudinary = async (recordingUrl) => {
+  /*  const storeRecordsInCloudinary = async (recordingUrl) => {
     let response = "";
     try {
       console.log('Fetching Twilio recording...');
@@ -347,20 +318,25 @@ const hangUpCall = async(callSid) => {
     }
   
     return response?.secure_url || response;
-  };  */ 
-  const storeRecordsInCloudinary = async (recordingUrl) => {
+  }; */  
+/*   const storeRecordsInCloudinary = async (recordingUrl) => {
     try {
         console.log('Fetching Twilio recording...');
         
-        const twilioResponse = await axios.get(recordingUrl, {
+        try {
+       
+          const twilioResponse = await axios.get(recordingUrl, {
             headers: {
                 'Authorization': `Basic ${Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64')}`,
                 'Accept': 'audio/mpeg',
                 'Content-Type': 'audio/mpeg'
             },
-            responseType: 'arraybuffer'
+            responseType: 'arraybuffer' // Ensures the response is treated as binary data
         });
-        console.log("twilioResponse", twilioResponse);
+          console.log("twilioResponse", twilioResponse.data);
+      } catch (error) {
+          console.error("Error fetching recording:", error.response || error);
+      }
         console.log("Successfully fetched Twilio recording, uploading to Cloudinary...");
 
         return new Promise((resolve, reject) => {
@@ -383,18 +359,159 @@ const hangUpCall = async(callSid) => {
         console.error('Error in storing call record in Cloudinary:', err);
         return null;
     }
+}; */
+//the last one
+ const storeRecordsInCloudinary = async (recordingUrl) => {
+  try {
+      console.log('Fetching Twilio recording...');
+      console.log("recordingUrl to be fetched",recordingUrl);
+
+      //const recordingUrl = "https://api.twilio.com/2010-04-01/Accounts/AC8a453959a6cb01cbbd1c819b00c5782f/Recordings/REcced49de7252ee0f2561d66fb951d1e0.mp3";
+      const data = {
+        recordingUrl,
+    };
+     const response= await axios.post('http://localhost:3000/api/calls/fetch-recording', data, {
+        headers: {
+            'Content-Type': 'application/json'
+        }
+    });
+console.log("response.data",response.data);
+      if (!response.data) {
+          console.error("Twilio response is empty or invalid.");
+          return null;
+      }
+
+      console.log("Successfully fetched Twilio recording, uploading to Cloudinary...");
+
+      return new Promise((resolve, reject) => {
+          const uploadStream =  cloudinary.uploader.upload_stream(
+              { resource_type: 'video', folder: 'V25_Call_Records' },
+              (error, result) => {
+                  if (error) {
+                      console.error('Error uploading to Cloudinary:', error);
+                      return reject(error);
+                  }
+                  console.log('Uploaded to Cloudinary:', result.secure_url);
+               resolve(result.secure_url);
+             
+              }
+          );
+
+          uploadStream.end(twilioResponse);
+      });
+
+  } catch (err) {
+      console.error('Error in storing call record in Cloudinary:', err);
+      return null;
+  }
+};  
+
+
+//fetch
+/* const storeRecordsInCloudinary = async (recordingUrl) => {
+  try {
+      console.log('Fetching Twilio recording...');
+      console.log("recordingUrl to be fetched", recordingUrl);
+      let twilioResponse; // Déclaration de la variable avant le try-catch
+
+      try {
+          const response = await fetch(recordingUrl, {
+              method: 'GET',
+              headers: {
+                  'Authorization': `Basic ${Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64')}`,
+                  'Accept': 'audio/mpeg',  // Indique que tu attends un fichier audio
+                  'Content-Type': 'audio/mpeg'
+              }
+          });
+
+          if (!response.ok) {
+              throw new Error(`Failed to fetch Twilio recording. Status code: ${response.status}`);
+          }
+
+          // Récupère la réponse en tant que buffer binaire
+          twilioResponse = await response.buffer();
+
+          console.log("Twilio recording fetched successfully.");
+      } catch (error) {
+          console.error("Error fetching recording:", error);
+          return null; // Stoppe l'exécution si l'enregistrement n'a pas pu être récupéré
+      }
+
+      if (!twilioResponse) {
+          console.error("Twilio response is empty or invalid.");
+          return null;
+      }
+
+      console.log("Successfully fetched Twilio recording, uploading to Cloudinary...");
+
+      return new Promise((resolve, reject) => {
+          const uploadStream = cloudinary.uploader.upload_stream(
+              { resource_type: 'video', folder: 'V25_Call_Records' },
+              (error, result) => {
+                  if (error) {
+                      console.error('Error uploading to Cloudinary:', error);
+                      return reject(error);
+                  }
+                  console.log('Uploaded to Cloudinary:', result.secure_url);
+                  resolve(result.secure_url);
+              }
+          );
+
+          uploadStream.end(twilioResponse);
+      });
+
+  } catch (err) {
+      console.error('Error in storing call record in Cloudinary:', err);
+      return null;
+  }
 };
+ */
 
 
+async function fetchTwilioRecording(recordingUrl) {
+  try {
+      const auth = `Basic ${Buffer.from(`${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`).toString('base64')}`;
+      console.log("auth",auth);
+      const response = await axios.get(recordingUrl, {
+          headers: {
+              'Content-Type': 'audio/mpeg',
+             'Accept': '*/*',
+              'Authorization': auth,
+          },
+          responseType: 'arraybuffer',
+     });
+      
+      console.log("Twilio recording fetched:",response.data);
+      
+      return new Promise((resolve, reject) => {
+        const uploadStream =  cloudinary.uploader.upload_stream(
+            { resource_type: 'video', folder: 'V25_Call_Records' },
+            (error, result) => {
+                if (error) {
+                    console.error('Error uploading to Cloudinary:', error);
+                    return reject(error);
+                }
+                console.log('Uploaded to Cloudinary:', result.secure_url);
+             resolve(result.secure_url);
+           
+            }
+        );
 
-
+        uploadStream.end(response.data);
+    });
+     // return response.data;
+  } catch (error) {
+      console.error("Error fetching recording:", error.response || error);
+      return null;
+  }
+}
 
 
 
 
 
 module.exports = {
-    makeCall,trackCallStatus,hangUpCall,generateTwilioToken,generateTwimlResponse,getCallDetails,saveCallToDB
+    makeCall,trackCallStatus,hangUpCall,generateTwilioToken,generateTwimlResponse,getCallDetails,saveCallToDB,fetchTwilioRecording
 };
 
 
