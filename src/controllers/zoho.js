@@ -97,7 +97,7 @@ const getChats = async (req, res) => {
   }
 
   try {
-    const response = await axios.get(`https://salesiq.zoho.com/api/v1/qara/chats`, {
+    const response = await axios.get(`https://salesiq.zoho.com/api/v1/harxtechnologiesinc/chats`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
 
@@ -143,7 +143,7 @@ const getChatTranscript = async (req, res) => {
 
   try {
     const response = await axios.get(
-      `https://salesiq.zoho.com/api/v1/qara/chats/${chat_id}/Transcript`,
+      `https://salesiq.zoho.com/api/v1/harxtechnologiesinc/chats/${chat_id}/Transcript`,
       {
         headers: { Authorization: `Bearer ${accessToken}` },
       }
