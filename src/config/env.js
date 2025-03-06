@@ -15,6 +15,7 @@ const config = {
   ZOHO_API_URL: process.env.ZOHO_API_URL,
   REACT_APP_URL: process.env.REACT_APP_URL,
   BACKEND_URL: process.env.BACKEND_URL,
+  ZOHO_SALESIQ_PORTAL_ID: process.env.ZOHO_SALESIQ_PORTAL_ID,
 };
 
 
