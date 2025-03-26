@@ -4,6 +4,7 @@ const { config } = require('./config/env');
 const { connectDB } = require('./config/database');
 const { errorHandler } = require('./middleware/error');
 const axios = require('axios');
+const zohoRoutes = require('./routes/zoho');
 
 // Route imports
 const auth = require('./routes/auth');
@@ -14,7 +15,6 @@ const calls = require('./routes/calls');
 const settings = require('./routes/settings');
 const analytics = require('./routes/analytics');
 const dashboard = require('./routes/dashboard');
-const zoho = require('./routes/zoho');
 
 const Chat = require("./models/Chat");
 
@@ -122,7 +122,11 @@ const app = express();
 app.use(express.json());
 
 // Enable CORS
-app.use(cors());
+app.use(cors({
+  origin: 'http://localhost:5180', // L'origine de votre frontend
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel'] // Ajoutez x-channel ici
+}));
 
 // Mount routers
 app.use('/api/auth', auth);
@@ -133,7 +137,7 @@ app.use('/api/calls', calls);
 app.use('/api/settings', settings);
 app.use('/api/analytics', analytics);
 app.use('/api/dashboard', dashboard);
-app.use('/api/zoho', zoho);
+app.use('/api/zoho', zohoRoutes);
 
 
 // app.use('/', (req, res) => {

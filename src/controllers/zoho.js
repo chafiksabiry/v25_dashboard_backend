@@ -1,259 +1,418 @@
 const axios = require("axios");
 const { config } = require("../config/env");
 const { Lead } = require("../models/Lead");
+const ZohoConfig = require("../models/ZohoConfig");
+const mongoose = require("mongoose");
 
-const redirectToZoho = (req, res) => {
-  console.log("Redirection vers Zoho pour l'authentification...");
-
-  const entity = req.query.entity || "leads"; // Récupération de l'entité depuis la requête
-  const validEntities = ["leads", "deals", "contacts"];
-  const state = validEntities.includes(entity) ? entity : "leads"; // Vérification de l'entité
-
-  const authURL = `${config.ZOHO_AUTH_URL}?response_type=code&client_id=${config.ZOHO_CLIENT_ID}&scope=${config.ZOHO_SCOPE}&redirect_uri=${config.ZOHO_REDIRECT_URI}&access_type=offline&state=${state}`;
-
-  console.log("URL d'authentification Zoho:", authURL);
-  res.redirect(authURL);
-};
-
-const zohoCallback = async (req, res) => {
-  console.log("Callback reçu avec query params:", req.query);
-  const { code, state } = req.query;
-
-  if (!code) return res.status(400).send("Code d'authentification manquant");
-
-  try {
-    console.log("Échange du code d'authentification contre un token...");
-    const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
-      params: {
-        code,
-        client_id: config.ZOHO_CLIENT_ID,
-        client_secret: config.ZOHO_CLIENT_SECRET,
-        redirect_uri: config.ZOHO_REDIRECT_URI,
-        grant_type: "authorization_code",
-      },
-    });
-
-    console.log("Token reçu:", response.data);
-    const accessToken = response.data.access_token;
-    const refreshToken = response.data.refresh_token;
-
-    req.app.locals.refreshToken = refreshToken;
-
-    // Vérifier et valider `state`
-    const validEntities = ["leads", "deals", "contacts"];
-    const entity = validEntities.includes(state) ? state : "leads"; // Valeur par défaut si invalide
-
-    const redirectURL = `${config.REACT_APP_URL}/${entity}?token=${accessToken}`;
-    console.log("Redirection vers:", redirectURL);
-    res.redirect(redirectURL);
-  } catch (error) {
-    console.error(
-      "Erreur lors de la récupération du token:",
-      error.response?.data || error.message
-    );
-    res.status(500).send("Erreur d'authentification");
+const refreshToken = async (app) => {
+  if (!app || !app.locals) {
+    console.error("App non définie ou app.locals inaccessible");
+    return null;
   }
-};
 
-const refreshToken = async () => {
   try {
-    const refreshToken = req.app.locals.refreshToken;
-    if (!refreshToken) {
-      throw new Error("Aucun refresh token disponible");
+    // Récupérer la configuration depuis la base de données
+    const zohoConfig = await ZohoConfig.findOne().sort({ lastUpdated: -1 });
+
+    if (!zohoConfig) {
+      console.error("Configuration Zoho non trouvée dans la base de données");
+      throw new Error("Configuration Zoho CRM requise");
     }
 
+    console.log("Rafraîchissement du token en cours...");
     const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
       params: {
-        refresh_token: refreshToken,
-        client_id: config.ZOHO_CLIENT_ID,
-        client_secret: config.ZOHO_CLIENT_SECRET,
+        refresh_token: zohoConfig.refreshToken,
+        client_id: zohoConfig.clientId,
+        client_secret: zohoConfig.clientSecret,
         grant_type: "refresh_token",
       },
     });
 
+    if (!response.data.access_token) {
+      console.error("Réponse de rafraîchissement invalide:", response.data);
+      throw new Error("Token non reçu dans la réponse");
+    }
+
     const newAccessToken = response.data.access_token;
-    req.app.locals.accessToken = newAccessToken;
+    console.log("Nouveau token rafraîchi obtenu");
     return newAccessToken;
   } catch (error) {
     console.error(
-      "Erreur lors du rafraîchissement du token:",
-      error.response?.data || error.message
+      "Erreur détaillée lors du rafraîchissement du token:",
+      error.response?.data || error.message,
+      error.stack
     );
-    return null;
+    throw new Error("Échec du rafraîchissement du token");
   }
 };
 
-const getChats = async (req, res) => {
-  console.log("Récupération des chats depuis Zoho...");
-
-  const accessToken = req.headers.authorization?.split(" ")[1];
-
-  if (!accessToken) {
-    console.log("Non authentifié. Redirection vers la connexion Zoho.");
-    return res.status(401).json({
-      message: "Non authentifié",
-      loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
-    });
+const checkAuth = (req) => {
+  if (!req.headers.authorization) {
+    throw new Error("Token d'accès requis dans les headers");
   }
 
-  try {
-    const response = await axios.get(`https://salesiq.zoho.com/api/v1/qara/chats`, {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    });
-
-    console.log("Chats récupérés:", response.data);
-    res.json({ success: true, data: response.data });
-  } catch (error) {
-    console.error(
-      "Erreur lors de la récupération des chats:",
-      error.response?.data || error.message
-    );
-
-    if (error.response?.data?.code === "INVALID_TOKEN") {
-      console.log("Token invalide. Demande d'une nouvelle authentification.");
-      return res.status(401).json({
-        message: "Token invalide. Redirection vers la connexion Zoho.",
-        loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
-      });
-    }
-
-    res
-      .status(500)
-      .json({ message: "Erreur lors de la récupération des chats" });
+  // Vérifier que le token est au bon format
+  const token = req.headers.authorization.split(" ")[1];
+  if (!token) {
+    throw new Error("Format du token invalide");
   }
 };
 
-const getChatTranscript = async (req, res) => {
-  console.log("Récupération de la transcription du chat depuis Zoho...");
-
-  const accessToken = req.headers.authorization?.split(" ")[1];
-  const { chat_id } = req.params;
-
-  if (!accessToken) {
-    console.log("Non authentifié. Redirection vers la connexion Zoho.");
-    return res.status(401).json({
-      message: "Non authentifié",
-      loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
-    });
-  }
-
-  if (!chat_id) {
-    return res.status(400).json({ message: "chat_id est requis" });
-  }
-
+const executeWithTokenRefresh = async (req, res, apiCall) => {
   try {
-    const response = await axios.get(
-      `https://salesiq.zoho.com/api/v1/qara/chats/${chat_id}/Transcript`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
+    let accessToken = req.headers.authorization?.split(" ")[1];
+
+    if (!accessToken || accessToken.startsWith("temp_")) {
+      console.log(
+        "Token temporaire détecté, recherche de la configuration dans la base de données..."
+      );
+
+      // Récupérer la configuration depuis la base de données
+      const zohoConfig = await ZohoConfig.findOne().sort({ lastUpdated: -1 });
+
+      if (!zohoConfig) {
+        console.error(
+          "Aucune configuration Zoho trouvée dans la base de données"
+        );
+        throw new Error("Configuration_Required");
       }
-    );
 
-    console.log("Transcription récupérée:", response.data);
-    res.json({ success: true, data: response.data });
+      // Mettre à jour app.locals avec les informations de la base de données
+      req.app.locals.refreshToken = zohoConfig.refreshToken;
+      req.app.locals.clientId = zohoConfig.clientId;
+      req.app.locals.clientSecret = zohoConfig.clientSecret;
+
+      console.log(
+        "Configuration trouvée, tentative de rafraîchissement du token..."
+      );
+      accessToken = await refreshToken(req.app);
+
+      if (!accessToken) {
+        throw new Error("Token_Refresh_Failed");
+      }
+    }
+
+    console.log("Tentative d'appel API avec le token");
+    try {
+      const result = await apiCall(accessToken);
+      return { success: true, data: result };
+    } catch (error) {
+      if (
+        error.response?.status === 401 ||
+        error.response?.data?.code === "INVALID_TOKEN"
+      ) {
+        console.log("Token invalide, nouveau rafraîchissement...");
+        accessToken = await refreshToken(req.app);
+        if (!accessToken) {
+          throw new Error("Token_Refresh_Failed");
+        }
+        const result = await apiCall(accessToken);
+        return { success: true, data: result };
+      }
+      throw error;
+    }
   } catch (error) {
-    console.error(
-      "Erreur lors de la récupération de la transcription:",
-      error.response?.data || error.message
-    );
+    console.error("Erreur dans executeWithTokenRefresh:", error.message);
+    throw error;
+  }
+};
 
-    if (error.response?.data?.code === "INVALID_TOKEN") {
-      console.log("Token invalide. Demande d'une nouvelle authentification.");
+// Modifier la fonction getSalesIQPortalName
+const getSalesIQPortalName = async (token) => {
+  console.log("Tentative de récupération du portal name avec token:", token.substring(0, 10) + "...");
+
+  const response = await axios.get("https://salesiq.zoho.com/api/v2/portals", {
+    headers: {
+      Authorization: `Zoho-oauthtoken ${token}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  console.log("Réponse SalesIQ organizations:", response.data);
+
+  if (response.data && response.data.data && response.data.data.length > 0) {
+    const portalName = response.data.data[0].screenname;
+    console.log("Portal name trouvé:", portalName);
+    return portalName;
+  }
+
+  throw new Error("Aucune organisation SalesIQ trouvée");
+};
+
+// Modifier la fonction getChats
+const getChats = async (req, res) => {
+  console.log("Début de getChats");
+  try {
+    checkAuth(req);
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      try {
+        console.log("Tentative de récupération des chats avec token:", token.substring(0, 10) + "...");
+
+        // Récupérer le portal name avec gestion d'erreur
+        let portalName;
+        try {
+          portalName = await getSalesIQPortalName(token);
+        } catch (portalError) {
+          console.error("Erreur lors de la récupération du portal name:", portalError);
+          throw new Error(`Erreur SalesIQ: ${portalError.message}`);
+        }
+
+        if (!portalName) {
+          throw new Error("Portal name non trouvé");
+        }
+
+        console.log("Tentative d'appel à l'API conversations avec portal name:", portalName);
+
+        const response = await axios.get(
+          `https://salesiq.zoho.com/api/v2/${portalName}/conversations`,
+          {
+            headers: {
+              Authorization: `Zoho-oauthtoken ${token}`,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+            },
+          }
+        );
+
+        return response.data;
+      } catch (apiError) {
+        console.error("Erreur API détaillée:", {
+          status: apiError.response?.status,
+          statusText: apiError.response?.statusText,
+          data: apiError.response?.data,
+          message: apiError.message,
+        });
+
+        // Gestion spécifique des erreurs SalesIQ
+        if (apiError.response?.status === 401) {
+          throw new Error("Token non autorisé pour SalesIQ");
+        } else if (apiError.response?.status === 403) {
+          throw new Error("Permissions insuffisantes pour SalesIQ");
+        } else if (apiError.message.includes("SalesIQ")) {
+          throw apiError;
+        }
+
+        throw new Error(
+          apiError.response?.data?.error?.message || "Erreur API SalesIQ"
+        );
+      }
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Erreur complète getChats:", {
+      message: error.message,
+      stack: error.stack,
+      response: error.response?.data,
+    });
+
+    // Gestion spécifique des erreurs
+    if (error.message.includes("SalesIQ")) {
       return res.status(401).json({
-        message: "Token invalide. Redirection vers la connexion Zoho.",
-        loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
+        success: false,
+        message: error.message,
+        requiresSalesIQConfiguration: true,
       });
     }
 
-    res
-      .status(500)
-      .json({ message: "Erreur lors de la récupération de la transcription" });
+    if (error.message === "Configuration_Required") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        requiresConfiguration: true,
+      });
+    }
+
+    if (
+      error.message === "Token_Refresh_Required" ||
+      error.message === "Token_Refresh_Failed"
+    ) {
+      return res.status(401).json({
+        success: false,
+        message: "Rafraîchissement du token nécessaire. Veuillez reconfigurer.",
+        requiresConfiguration: true,
+      });
+    }
+
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.message || "Erreur lors de la récupération des chats",
+      details:
+        error.response?.data || "Pas de détails supplémentaires disponibles",
+    });
+  }
+};
+
+const getCoversationMessages = async (req, res) => {
+  console.log("Début de getCoversationMessages");
+  const { id } = req.params;
+
+  try {
+    checkAuth(req);
+
+    if (!id) {
+      return res.status(400).json({
+        success: false,
+        message: "ID de conversation requis",
+      });
+    }
+
+    // Vérifier que l'ID est au bon format
+    if (!/^[0-9a-zA-Z]+$/.test(id)) {
+      return res.status(400).json({
+        success: false,
+        message: "Format d'ID de conversation invalide",
+      });
+    }
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      try {
+        // Récupérer le portal name
+        const portalName = await getSalesIQPortalName(token);
+        console.log("Portal name récupéré:", portalName);
+
+        const response = await axios.get(
+          `https://salesiq.zoho.com/api/v2/${portalName}/conversations/${id}/messages`,
+          {
+            headers: {
+              Authorization: `Zoho-oauthtoken ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        // Log de la réponse pour le débogage
+        console.log("Réponse de l'API Zoho:", response.data);
+
+        return response.data;
+      } catch (apiError) {
+        console.error("Erreur API détaillée:", {
+          status: apiError.response?.status,
+          data: apiError.response?.data,
+          message: apiError.message,
+        });
+
+        // Gestion spécifique des erreurs API
+        if (apiError.response?.status === 400) {
+          throw new Error(
+            "ID de conversation invalide ou conversation non trouvée"
+          );
+        }
+        throw apiError;
+      }
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.message === "Configuration_Required") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        requiresConfiguration: true,
+      });
+    }
+
+    if (error.message === "Token_Refresh_Failed") {
+      return res.status(401).json({
+        success: false,
+        message: "Échec du rafraîchissement du token. Veuillez reconfigurer.",
+        requiresConfiguration: true,
+      });
+    }
+
+    console.error(
+      "Erreur lors de la récupération des messages:",
+      error.message
+    );
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: error.message || "Erreur lors de la récupération des messages",
+      error: error.response?.data || error.message,
+      details: error.response?.data,
+    });
   }
 };
 
 const getDeals = async (req, res) => {
-  console.log("Récupération des deals depuis Zoho...");
-
-  const accessToken = req.headers.authorization?.split(" ")[1];
-
-  if (!accessToken) {
-    console.log("Non authentifié. Redirection vers la connexion Zoho.");
-    return res.status(401).json({
-      message: "Non authentifié",
-      loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
-    });
-  }
-
+  console.log("Début de getDeals");
   try {
-    const response = await axios.get(`${config.ZOHO_API_URL}/Deals`, {
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    checkAuth(req);
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      const response = await axios.get(`${config.ZOHO_API_URL}/Deals`, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      });
+      return response.data;
     });
 
-    console.log("Deals récupérés:", response.data);
-    res.json({ success: true, data: response.data });
+    res.json({ success: true, data });
   } catch (error) {
-    console.error(
-      "Erreur lors de la récupération des deals:",
-      error.response?.data || error.message
-    );
-
-    if (error.response?.data?.code === "INVALID_TOKEN") {
-      console.log("Token invalide. Redirection vers l'authentification.");
+    if (error.message === "Configuration Zoho CRM requise") {
       return res.status(401).json({
-        message: "Token invalide. Veuillez vous reconnecter.",
-        loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Utilisez /api/zoho/configure pour configurer.",
       });
     }
-
-    res
-      .status(500)
-      .json({ message: "Erreur lors de la récupération des deals" });
+    console.error("Erreur lors de la récupération des deals:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des deals",
+    });
   }
 };
 
 const getLeads = async (req, res) => {
-  console.log("Récupération des leads depuis Zoho...");
-
-  let accessToken = req.headers.authorization?.split(" ")[1];
-  if (!accessToken) {
-    console.log("Aucun accessToken. Tentative de rafraîchissement...");
-    accessToken = await refreshToken();
-    if (!accessToken) {
-      return res.status(401).json({
-        message: "Non authentifié. Veuillez vous reconnecter.",
-        loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
-      });
-    }
-  }
-
+  console.log("Début de getLeads");
   try {
-    const response = await axios.get(`${config.ZOHO_API_URL}/Leads`, {
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+    checkAuth(req);
+
+    const result = await executeWithTokenRefresh(req, res, async (token) => {
+      console.log("Appel API Zoho avec token");
+      const response = await axios.get(`${config.ZOHO_API_URL}/Deals`, {
+        headers: {
+          Authorization: `Zoho-oauthtoken ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+      return response.data;
     });
 
-    console.log("Leads récupérés:", response.data);
-    res.json({ success: true, data: response.data });
+    res.json(result);
   } catch (error) {
-    console.error(
-      "Erreur lors de la récupération des leads:",
-      error.response?.data || error.message
-    );
+    console.error("Erreur complète getLeads:", error.message);
 
-    if (error.response?.data?.code === "INVALID_TOKEN") {
-      console.log("Token invalide. Tentative de rafraîchissement...");
-      accessToken = await refreshToken();
-      if (accessToken) {
-        return getLeads(req, res); // Refaire la requête avec le nouveau token
-      }
+    if (error.message === "Configuration_Required") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        requiresConfiguration: true,
+      });
     }
 
-    res
-      .status(500)
-      .json({ message: "Erreur lors de la récupération des leads" });
+    if (error.message === "Token_Refresh_Failed") {
+      return res.status(401).json({
+        success: false,
+        message: "Échec du rafraîchissement du token. Veuillez reconfigurer.",
+        requiresConfiguration: true,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des leads",
+      error: error.message,
+    });
   }
 };
 
 const saveLeads = async (req, res) => {
+  console.log("Début de saveLeads");
   console.log("Sauvegarde des leads...");
   try {
     const leads = req.body.leads;
@@ -286,113 +445,961 @@ const saveLeads = async (req, res) => {
 };
 
 const getDealsCount = async (req, res) => {
-  console.log("Récupération du nombre de deals depuis Zoho...");
-
-  const accessToken = req.headers.authorization?.split(" ")[1];
-
-  if (!accessToken) {
-    console.log("Non authentifié. Redirection vers la connexion Zoho.");
-    return res.status(401).json({
-      message: "Non authentifié",
-      loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
-    });
-  }
-
-  const pageSize = 200;
-  const batchLimit = 10; // Nombre de pages par lot avant d'attendre
-  let allDeals = [];
-  let totalDeals = 0;
-
+  console.log("Début de getDealsCount");
   try {
-    let page = 1;
-    let hasMore = true;
+    checkAuth(req);
 
-    while (hasMore) {
-      const batchPromises = [];
-      for (let i = 0; i < batchLimit; i++) {
-        batchPromises.push(
-          axios.get("https://www.zohoapis.com/crm/v2/Deals", {
-            headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-            params: { page: page++, per_page: pageSize },
-          })
-        );
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      const pageSize = 200;
+      const batchLimit = 10;
+      let allDeals = [];
+      let page = 1;
+      let hasMore = true;
+
+      while (hasMore) {
+        const batchPromises = [];
+        for (let i = 0; i < batchLimit; i++) {
+          batchPromises.push(
+            axios.get("https://www.zohoapis.com/crm/v2/Deals", {
+              headers: { Authorization: `Zoho-oauthtoken ${token}` },
+              params: { page: page++, per_page: pageSize },
+            })
+          );
+        }
+
+        const batchResults = await Promise.all(batchPromises);
+        batchResults.forEach((result) => {
+          allDeals = allDeals.concat(result.data.data);
+        });
+
+        hasMore = batchResults[batchResults.length - 1].data.info.more_records;
+        await new Promise((resolve) => setTimeout(resolve, 5000));
       }
 
-      const batchResults = await Promise.all(batchPromises);
-      batchResults.forEach((result) => {
-        allDeals = allDeals.concat(result.data.data);
-      });
+      return { count: allDeals.length, deals: allDeals };
+    });
 
-      hasMore = batchResults[batchResults.length - 1].data.info.more_records;
-
-      // Attendre un certain délai pour respecter les limites d'API de Zoho
-      await new Promise((resolve) => setTimeout(resolve, 5000)); // Attendre 5 secondes entre chaque lot de requêtes
-    }
-
-    totalDeals = allDeals.length;
-    console.log("Nombre total de deals récupérés:", totalDeals);
-    res.json({ success: true, count: totalDeals, deals: allDeals });
+    res.json({ success: true, count: data.count, deals: data.deals });
   } catch (error) {
-    console.error(
-      "Erreur lors de la récupération des deals:",
-      error.response?.data || error.message
-    );
-    res
-      .status(500)
-      .json({ message: "Erreur lors de la récupération des deals" });
+    if (error.message === "Configuration Zoho CRM requise") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Utilisez /api/zoho/configure pour configurer.",
+      });
+    }
+    console.error("Erreur lors de la récupération des deals:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des deals",
+    });
   }
 };
 
 const getContacts = async (req, res) => {
-  console.log("Récupération des contacts depuis Zoho...");
+  console.log("Début de getContacts");
+  try {
+    checkAuth(req);
 
-  const accessToken = req.headers.authorization?.split(" ")[1];
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      const response = await axios.get(`${config.ZOHO_API_URL}/Contacts`, {
+        headers: { Authorization: `Zoho-oauthtoken ${token}` },
+      });
+      return response.data;
+    });
 
-  if (!accessToken) {
-    console.log("Non authentifié. Redirection vers la connexion Zoho.");
-    return res.status(401).json({
-      message: "Non authentifié",
-      loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.message === "Configuration Zoho CRM requise") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Utilisez /api/zoho/configure pour configurer.",
+      });
+    }
+    console.error(
+      "Erreur lors de la récupération des contacts:",
+      error.message
+    );
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des contacts",
+    });
+  }
+};
+
+const sendMessageToConversation = async (req, res) => {
+  console.log("Début de sendMessageToConversation");
+  const { id } = req.params;
+  const { text } = req.body;
+
+  try {
+    checkAuth(req);
+
+    if (!id || !text) {
+      return res.status(400).json({ message: "id et message sont requis" });
+    }
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Récupérer le portal name
+      const portalName = await getSalesIQPortalName(token);
+      console.log("Portal name récupéré:", portalName);
+
+      const response = await axios.post(
+        `https://salesiq.zoho.com/api/v2/${portalName}/conversations/${id}/messages`,
+        { text },
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      return response.data;
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.message === "Configuration_Required") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        requiresConfiguration: true,
+      });
+    }
+
+    if (error.message === "Token_Refresh_Failed") {
+      return res.status(401).json({
+        success: false,
+        message: "Échec du rafraîchissement du token. Veuillez reconfigurer.",
+        requiresConfiguration: true,
+      });
+    }
+
+    console.error("Erreur lors de l'envoi du message:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de l'envoi du message",
+      error: error.message,
+    });
+  }
+};
+
+// Ajouter cette fonction utilitaire pour obtenir l'ID du compte mail
+const getZohoMailAccountId = async (token) => {
+  try {
+    const response = await axios.get("https://mail.zoho.com/api/accounts", {
+      headers: {
+        Authorization: `Zoho-oauthtoken ${token}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.data && response.data.data && response.data.data.length > 0) {
+      return response.data.data[0].accountId;
+    }
+    throw new Error("Aucun compte mail trouvé");
+  } catch (error) {
+    console.error("Erreur lors de la récupération de l'ID du compte:", error);
+    throw error;
+  }
+};
+
+// Modifier la fonction getFolders
+const getFolders = async (req, res) => {
+  console.log("Début de getFolders");
+  try {
+    checkAuth(req);
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Obtenir l'ID du compte dynamiquement
+      const accountId = await getZohoMailAccountId(token);
+
+      const response = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/folders`,
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      return response.data;
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Erreur lors de la récupération des dossiers:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des dossiers",
+      error: error.message,
+    });
+  }
+};
+
+// Modifier la fonction getSentEmails
+const getSentEmails = async (req, res) => {
+  console.log("Début de getSentEmails");
+  try {
+    checkAuth(req);
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Obtenir l'ID du compte dynamiquement
+      const accountId = await getZohoMailAccountId(token);
+
+      // Récupérer les dossiers
+      const foldersResponse = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/folders`,
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      // Trouver le dossier "Sent"
+      const sentFolder = foldersResponse.data.data.find(
+        (folder) => folder.folderType === "Sent"
+      );
+
+      if (!sentFolder) {
+        throw new Error('Dossier "Sent" non trouvé');
+      }
+
+      // Récupérer les emails
+      const emailsResponse = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/messages/view`,
+        {
+          params: {
+            folderId: sentFolder.folderId,
+          },
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return emailsResponse.data;
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Erreur lors de la récupération des emails envoyés:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des emails envoyés",
+      error: error.message,
+    });
+  }
+};
+
+// Modifier la fonction getInboxEmails
+const getInboxEmails = async (req, res) => {
+  console.log("Début de getInboxEmails");
+  try {
+    checkAuth(req);
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Obtenir l'ID du compte dynamiquement
+      const accountId = await getZohoMailAccountId(token);
+
+      // Récupérer les dossiers
+      const foldersResponse = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/folders`,
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      // Trouver le dossier "Inbox"
+      const inboxFolder = foldersResponse.data.data.find(
+        (folder) => folder.folderType === "Inbox"
+      );
+
+      if (!inboxFolder) {
+        throw new Error('Dossier "Inbox" non trouvé');
+      }
+
+      // Récupérer les emails
+      const emailsResponse = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/messages/view`,
+        {
+          params: {
+            folderId: inboxFolder.folderId,
+          },
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return emailsResponse.data;
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error(
+      "Erreur lors de la récupération des emails de la boîte de réception:",
+      error
+    );
+    res.status(500).json({
+      success: false,
+      message:
+        "Erreur lors de la récupération des emails de la boîte de réception",
+      error: error.message,
+    });
+  }
+};
+
+// Modifier la fonction getArchivedEmails
+const getArchivedEmails = async (req, res) => {
+  console.log("Début de getArchivedEmails");
+  try {
+    checkAuth(req);
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Obtenir l'ID du compte dynamiquement
+      const accountId = await getZohoMailAccountId(token);
+
+      // Récupérer les dossiers
+      const foldersResponse = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/folders`,
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      // Trouver le dossier "Archive"
+      const archiveFolder = foldersResponse.data.data.find(
+        (folder) => folder.folderName === "Archive"
+      );
+
+      if (!archiveFolder) {
+        throw new Error('Dossier "Archive" non trouvé');
+      }
+
+      // Récupérer les emails
+      const emailsResponse = await axios.get(
+        `https://mail.zoho.com/api/accounts/${accountId}/messages/view`,
+        {
+          params: {
+            folderId: archiveFolder.folderId,
+          },
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      return emailsResponse.data;
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Erreur lors de la récupération des emails archivés:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des emails archivés",
+      error: error.message,
+    });
+  }
+};
+
+const updateLead = async (req, res) => {
+  console.log("Début de updateLead");
+  const { id } = req.params;
+  const leadData = req.body;
+
+  try {
+    checkAuth(req);
+
+    if (!id) {
+      return res.status(400).json({ message: "ID du lead est requis" });
+    }
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Préparer les données pour Zoho CRM
+      const zohoData = {
+        data: [leadData],
+      };
+
+      const response = await axios.put(
+        `${config.ZOHO_API_URL}/Deals/${id}`,
+        zohoData,
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+      return response.data;
+    });
+
+    // Mettre à jour également dans la base de données locale si nécessaire
+    try {
+      const updatedLead = await Lead.findOneAndUpdate(
+        { zohoId: id },
+        {
+          name: leadData.Full_Name,
+          company: leadData.Company,
+          email: leadData.Email,
+          phone: leadData.Phone,
+          status: leadData.Status || "updated",
+          // Autres champs à mettre à jour
+        },
+        { new: true }
+      );
+    } catch (dbError) {
+      console.log(
+        "Lead mis à jour dans Zoho mais pas dans la base de données locale:",
+        dbError
+      );
+    }
+
+    res.json({ success: true, data });
+  } catch (error) {
+    if (error.message === "Configuration Zoho CRM requise") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Utilisez /api/zoho/configure pour configurer.",
+      });
+    }
+    console.error("Erreur lors de la mise à jour du lead:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la mise à jour du lead",
+    });
+  }
+};
+
+const getLeadsByPipeline = async (req, res) => {
+  console.log("Début de getLeadsByPipeline");
+  try {
+    checkAuth(req);
+    const { pipeline } = req.query;
+
+    const result = await executeWithTokenRefresh(req, res, async (token) => {
+      // Construire la requête de base
+      const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
+      let url = baseURL;
+      let params = {
+        fields:
+          "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
+      };
+
+      // Si un pipeline est spécifié, ajouter les paramètres de recherche
+      if (pipeline) {
+        params.criteria = `(Pipeline:equals:${pipeline})`;
+      }
+
+      console.log("URL de requête:", url);
+      console.log("Paramètres:", params);
+
+      const response = await axios.get(url, {
+        params: params,
+        headers: {
+          Authorization: `Zoho-oauthtoken ${token}`,
+          "Content-Type": "application/json",
+        },
+      });
+
+      return response.data;
+    });
+
+    console.log("Résultat de la recherche:", JSON.stringify(result, null, 2));
+    res.json(result);
+  } catch (error) {
+    console.error("Erreur getLeadsByPipeline:", error.message);
+    console.error("Détails de l'erreur:", error.response?.data);
+
+    if (error.message === "Configuration_Required") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        requiresConfiguration: true,
+      });
+    }
+
+    if (error.message === "Token_Refresh_Failed") {
+      return res.status(401).json({
+        success: false,
+        message: "Échec du rafraîchissement du token. Veuillez reconfigurer.",
+        requiresConfiguration: true,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des leads du pipeline",
+      error: error.message,
+      details: error.response?.data,
+    });
+  }
+};
+
+const getTokenWithCredentials = async (req, res) => {
+  console.log("Début de getTokenWithCredentials");
+  const { email, password } = req.body;
+
+  if (!email || !password) {
+    return res.status(400).json({
+      success: false,
+      error: "Email et mot de passe requis",
     });
   }
 
   try {
-    const response = await axios.get(`${config.ZOHO_API_URL}/Contacts`, {
-      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
-    });
+    // Vérifier les identifiants dans votre système
+    // Par exemple, vérifier si l'email et le mot de passe correspondent à un utilisateur autorisé
+    // Cette partie dépendra de votre implémentation spécifique
 
-    console.log("Contacts récupérés:", response.data);
-    res.json({ success: true, data: response.data });
-  } catch (error) {
-    console.error(
-      "Erreur lors de la récupération des contacts:",
-      error.response?.data || error.message
-    );
+    // Si l'authentification est réussie, générer un token pour l'utilisateur
+    // Pour un test Postman, vous pouvez utiliser l'approche suivante:
 
-    if (error.response?.data?.code === "INVALID_TOKEN") {
-      console.log("Token invalide. Redirection vers l'authentification.");
-      return res.status(401).json({
-        message: "Token invalide. Veuillez vous reconnecter.",
-        loginURL: `${config.BACKEND_URL}/api/zoho/auth/callback`,
+    if (email === "admin@exemple.com" && password === "motdepasse123") {
+      // Utiliser le refresh token stocké pour obtenir un nouveau token
+      // ou rediriger vers l'authentification OAuth si nécessaire
+      try {
+        // Option 1: Utiliser un refresh token déjà stocké
+        const refreshTokenStored = req.app.locals.refreshToken;
+        if (refreshTokenStored) {
+          const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
+            params: {
+              refresh_token: refreshTokenStored,
+              client_id: config.ZOHO_CLIENT_ID,
+              client_secret: config.ZOHO_CLIENT_SECRET,
+              grant_type: "refresh_token",
+            },
+          });
+
+          return res.json({
+            success: true,
+            data: {
+              access_token: response.data.access_token,
+            },
+          });
+        }
+
+        // Option 2: Si pas de refresh token, informer qu'une authentification OAuth est nécessaire
+        return res.status(401).json({
+          success: false,
+          message: "Authentification OAuth nécessaire",
+        });
+      } catch (error) {
+        console.error(
+          "Erreur lors de la génération du token:",
+          error.response?.data || error.message
+        );
+        res
+          .status(500)
+          .json({ message: "Erreur lors de la génération du token" });
+      }
+    } else {
+      console.error("Authentification échouée");
+      res.status(401).json({
+        success: false,
+        message: "Authentification échouée",
       });
     }
-
-    res
-      .status(500)
-      .json({ message: "Erreur lors de la récupération des contacts" });
+  } catch (error) {
+    console.error(
+      "Erreur lors de la vérification des identifiants:",
+      error.response?.data || error.message
+    );
+    res.status(401).json({
+      success: false,
+      message: "Erreur lors de la vérification des identifiants",
+    });
   }
 };
 
+const configureZohoCRM = async (req, res) => {
+  console.log("Début de configureZohoCRM");
+  const { refreshToken, clientId, clientSecret } = req.body;
+
+  if (!refreshToken || !clientId || !clientSecret) {
+    return res.status(400).json({
+      success: false,
+      message: "refreshToken, clientId et clientSecret sont requis",
+    });
+  }
+
+  try {
+    console.log("Vérification de la connexion à MongoDB...");
+    if (mongoose.connection.readyState !== 1) {
+      throw new Error("La connexion MongoDB n'est pas établie");
+    }
+
+    console.log("Test de la validité des credentials Zoho...");
+    console.log("URL:", config.ZOHO_TOKEN_URL);
+    console.log("Paramètres:", {
+      refresh_token: refreshToken.substring(0, 10) + "...",
+      client_id: clientId.substring(0, 10) + "...",
+      client_secret: clientSecret.substring(0, 10) + "...",
+      grant_type: "refresh_token",
+    });
+
+    const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
+      params: {
+        refresh_token: refreshToken,
+        client_id: clientId,
+        client_secret: clientSecret,
+        grant_type: "refresh_token",
+      },
+    });
+
+    console.log("Réponse Zoho:", response.data);
+
+    if (!response.data || !response.data.access_token) {
+      console.error("Réponse Zoho invalide:", response.data);
+      throw new Error(
+        "Token non reçu de Zoho. Réponse: " + JSON.stringify(response.data)
+      );
+    }
+
+    const accessToken = response.data.access_token;
+    console.log("Token initial obtenu avec succès");
+
+    // Supprimer l'ancienne configuration
+    console.log("Suppression de l'ancienne configuration...");
+    await ZohoConfig.deleteMany({});
+
+    // Créer la nouvelle configuration
+    console.log("Sauvegarde de la nouvelle configuration...");
+    const zohoConfig = new ZohoConfig({
+      refreshToken,
+      clientId,
+      clientSecret,
+      lastUpdated: new Date(),
+    });
+
+    await zohoConfig.save();
+    console.log("Configuration sauvegardée avec succès, ID:", zohoConfig._id);
+
+    // Vérifier que la configuration a bien été sauvegardée
+    const savedConfig = await ZohoConfig.findById(zohoConfig._id);
+    if (!savedConfig) {
+      throw new Error("La configuration n'a pas été sauvegardée correctement");
+    }
+
+    // Mettre à jour app.locals
+    req.app.locals.refreshToken = refreshToken;
+    req.app.locals.clientId = clientId;
+    req.app.locals.clientSecret = clientSecret;
+
+    res.json({
+      success: true,
+      message: "Configuration Zoho CRM mise à jour avec succès",
+      accessToken: accessToken,
+      configId: zohoConfig._id,
+    });
+  } catch (error) {
+    console.error("Erreur détaillée lors de la configuration:", {
+      message: error.message,
+      response: error.response?.data,
+      stack: error.stack,
+    });
+
+    let errorMessage = "Erreur lors de la configuration de Zoho CRM";
+    if (error.response?.data) {
+      errorMessage += `: ${JSON.stringify(error.response.data)}`;
+    }
+
+    res.status(500).json({
+      success: false,
+      message: errorMessage,
+      error: error.message,
+      details: error.response?.data || null,
+    });
+  }
+};
+
+const disconnect = async (req, res) => {
+  console.log("Début de disconnect");
+  try {
+    // Révoquer le token d'accès actuel si présent
+    const accessToken = req.headers.authorization?.split(" ")[1];
+    if (accessToken) {
+      try {
+        await axios.post(
+          "https://accounts.zoho.com/oauth/v2/token/revoke",
+          null,
+          {
+            params: {
+              token: accessToken,
+            },
+          }
+        );
+      } catch (revokeError) {
+        console.warn(
+          "Erreur lors de la révocation du token:",
+          revokeError.message
+        );
+      }
+    }
+
+    // Supprimer la configuration de la base de données
+    await ZohoConfig.deleteMany({});
+
+    res.json({
+      success: true,
+      message: "Déconnexion réussie",
+    });
+  } catch (error) {
+    console.error("Erreur lors de la déconnexion:", error.message);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la déconnexion",
+    });
+  }
+};
+
+// Fonction utilitaire pour initialiser la configuration au démarrage du serveur
+const initializeZohoConfig = async (app) => {
+  try {
+    const zohoConfig = await ZohoConfig.findOne().sort({ lastUpdated: -1 });
+    if (zohoConfig) {
+      app.locals.refreshToken = zohoConfig.refreshToken;
+      app.locals.clientId = zohoConfig.clientId;
+      app.locals.clientSecret = zohoConfig.clientSecret;
+      console.log("Configuration Zoho chargée depuis la base de données");
+    }
+  } catch (error) {
+    console.error(
+      "Erreur lors de l'initialisation de la configuration Zoho:",
+      error
+    );
+  }
+};
+
+const checkConfiguration = async (req, res) => {
+  try {
+    const config = await ZohoConfig.findOne().sort({ lastUpdated: -1 });
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        message: "Aucune configuration trouvée",
+        requiresConfiguration: true,
+      });
+    }
+
+    // Tester si la configuration est valide
+    const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
+      params: {
+        refresh_token: config.refreshToken,
+        client_id: config.clientId,
+        client_secret: config.clientSecret,
+        grant_type: "refresh_token",
+      },
+    });
+
+    if (!response.data.access_token) {
+      throw new Error("Configuration invalide");
+    }
+
+    res.json({
+      success: true,
+      message: "Configuration valide",
+      lastUpdated: config.lastUpdated,
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la vérification de la configuration",
+      error: error.message,
+    });
+  }
+};
+
+const getPipelines = async (req, res) => {
+  console.log("Début de getPipelines");
+  try {
+    checkAuth(req);
+
+    // D'abord, récupérer le layout ID
+    const layoutData = await executeWithTokenRefresh(
+      req,
+      res,
+      async (token) => {
+        const response = await axios.get(
+          `https://www.zohoapis.com/crm/v2.1/settings/layouts`,
+          {
+            params: {
+              module: "Deals",
+            },
+            headers: {
+              Authorization: `Zoho-oauthtoken ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+        return response.data;
+      }
+    );
+
+    console.log("Réponse layout data:", JSON.stringify(layoutData, null, 2));
+
+    // Vérifier la structure de la réponse et trouver le layout ID
+    let layoutId;
+    if (
+      layoutData.success &&
+      layoutData.data &&
+      layoutData.data.layouts &&
+      layoutData.data.layouts.length > 0
+    ) {
+      layoutId = layoutData.data.layouts[0].id;
+    } else {
+      throw new Error(
+        "Structure de réponse layout invalide: " + JSON.stringify(layoutData)
+      );
+    }
+
+    if (!layoutId) {
+      throw new Error("Layout ID non trouvé dans la réponse");
+    }
+
+    console.log("Layout ID trouvé:", layoutId);
+
+    // Récupérer les pipelines avec le layout ID
+    const pipelinesData = await executeWithTokenRefresh(
+      req,
+      res,
+      async (token) => {
+        const response = await axios.get(
+          `https://www.zohoapis.com/crm/v2.1/settings/pipeline`,
+          {
+            params: {
+              layout_id: layoutId,
+            },
+            headers: {
+              Authorization: `Zoho-oauthtoken ${token}`,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+        return response.data;
+      }
+    );
+
+    console.log("Réponse pipelines:", JSON.stringify(pipelinesData, null, 2));
+
+    res.json({
+      success: true,
+      data: {
+        layoutId: layoutId,
+        pipelines: pipelinesData.data || pipelinesData,
+      },
+    });
+  } catch (error) {
+    console.error("Erreur détaillée getPipelines:", {
+      message: error.message,
+      response: error.response?.data,
+      stack: error.stack,
+    });
+
+    if (error.message === "Configuration Zoho CRM requise") {
+      return res.status(401).json({
+        success: false,
+        message:
+          "Configuration Zoho CRM requise. Utilisez /api/zoho/configure pour configurer.",
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des pipelines",
+      error: error.message,
+      details: error.response?.data,
+    });
+  }
+};
+
+const archiveEmail = async (req, res) => {
+  console.log("Début de archiveEmail");
+  const { id } = req.params;
+
+  try {
+    checkAuth(req);
+
+    if (!id) {
+      return res.status(400).json({ message: "ID de l'email requis" });
+    }
+
+    const data = await executeWithTokenRefresh(req, res, async (token) => {
+      // Obtenir l'ID du compte dynamiquement
+      const accountId = await getZohoMailAccountId(token);
+
+      console.log("AccountId:", accountId);
+      console.log("EmailId:", id);
+
+      const response = await axios.put(
+        `https://mail.zoho.com/api/accounts/${accountId}/updatemessage`,
+        {
+          mode: "archiveMails",
+          messageId: [id], // L'API attend un tableau d'IDs
+        },
+        {
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+          },
+        }
+      );
+
+      console.log("Réponse de l'API:", response.data);
+      return response.data;
+    });
+
+    res.json({ success: true, data });
+  } catch (error) {
+    console.error("Erreur détaillée:", error.response?.data || error.message);
+    res.status(error.response?.status || 500).json({
+      success: false,
+      message: "Erreur lors de l'archivage de l'email",
+      error: error.message,
+      details: error.response?.data,
+    });
+  }
+};
 
 module.exports = {
-  redirectToZoho,
-  zohoCallback,
   refreshToken,
   getLeads,
   saveLeads,
+  updateLead,
   getDeals,
   getContacts,
   getDealsCount,
   getChats,
-  getChatTranscript,
+  getCoversationMessages,
+  sendMessageToConversation,
+  getFolders,
+  getSentEmails,
+  getInboxEmails,
+  getArchivedEmails,
+  getLeadsByPipeline,
+  getTokenWithCredentials,
+  configureZohoCRM,
+  disconnect,
+  initializeZohoConfig,
+  checkConfiguration,
+  getPipelines,
+  archiveEmail,
+  getSalesIQPortalName,
 };

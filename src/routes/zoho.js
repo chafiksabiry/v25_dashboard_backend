@@ -1,110 +1,79 @@
 require("dotenv").config();
 const express = require("express");
 const axios = require("axios");
+const mongoose = require('mongoose');
 const {
-  redirectToZoho,
-  zohoCallback,
-  refreshToken,
   getLeads,
   saveLeads,
+  updateLead,
   getDeals,
   getContacts,
   getDealsCount,
   getChats,
-  getChatTranscript
+  getCoversationMessages,
+  sendMessageToConversation,
+  getFolders,
+  getSentEmails,
+  getInboxEmails,
+  getArchivedEmails,
+  getLeadsByPipeline,
+  getTokenWithCredentials,
+  configureZohoCRM,
+  disconnect,
+  checkConfiguration,
+  getPipelines,
+  archiveEmail
 } = require("../controllers/zoho");
 
 const router = express.Router();
 
-router.get("/auth", redirectToZoho);
-router.get("/auth/callback", zohoCallback);
-router.get("/refresh-token", refreshToken);
-router.get("/leads", getLeads);
-router.post("/leads/save", saveLeads);
-
-async function refreshAccessToken() {
-  try {
-    const response = await axios.post(
-      "https://accounts.zoho.com/oauth/v2/token",
-      null,
-      {
-        params: {
-          refresh_token: process.env.ZOHO_REFRESH_TOKEN,
-          client_id: process.env.ZOHO_CLIENT_ID,
-          client_secret: process.env.ZOHO_CLIENT_SECRET,
-          grant_type: "refresh_token",
-        },
-      }
-    );
-
-    // Mettre à jour l'access token dans l'environnement (ou base de données)
-    process.env.ZOHO_ACCESS_TOKEN = response.data.access_token;
-
-    return response.data.access_token;
-  } catch (error) {
-    console.error(
-      "Erreur lors du rafraîchissement de l'access token:",
-      error?.response?.data || error.message
-    );
-    throw new Error("Échec du rafraîchissement de l'access token");
+const zohoSchema = new mongoose.Schema({
+  clientId: {
+    type: String,
+    required: true
+  },
+  clientSecret: {
+    type: String,
+    required: true
+  },
+  refreshToken: {
+    type: String,
+    required: true
   }
-}
+}, { timestamps: true });
 
-// Rafraîchir l'access token si nécessaire
-async function getValidAccessToken() {
-  if (!process.env.ZOHO_ACCESS_TOKEN) {
-    await refreshAccessToken(); // Rafraîchit l'access token si nécessaire
-  }
-  return process.env.ZOHO_ACCESS_TOKEN;
-}
+const ZohoIntegration = mongoose.model('ZohoIntegration', zohoSchema);
 
-// Récupérer les chats depuis Zoho SalesIQ
-router.get("/chats", getChats);
+// Configuration et authentification
+router.post('/configure', configureZohoCRM);
+router.post('/token', getTokenWithCredentials);
+router.post('/disconnect', disconnect);
 
-// Récupérer le transcript d'un chat
-router.get("/chats/:chat_id/transcript", getChatTranscript);
+// Leads et Deals
+router.get('/leads', getLeads);
+router.post('/leads', saveLeads);
+router.put('/leads/:id', updateLead);
+router.get('/deals', getDeals);
+router.get('/deals/count', getDealsCount);
+router.get('/leads-by-pipeline', getLeadsByPipeline);
 
-router.post("/chats/:chat_id/send", async (req, res) => {
-  const { chat_id } = req.params;
-  const { message } = req.body;
+// Contacts
+router.get('/contacts', getContacts);
 
-  if (!message) {
-    return res.status(400).json({ error: "Le message ne peut pas être vide." });
-  }
+// Chats
+router.get('/chats', getChats);
+router.get('/chats/:id/messages', getCoversationMessages);
+router.post('/chats/:id/messages', sendMessageToConversation);
 
-  try {
-    const accessToken = await getValidAccessToken();
-    const url = `https://salesiq.zoho.com/api/v1/${process.env.ZOHO_SALESIQ_PORTAL}/chats/${chat_id}/messages`;
+// Emails
+router.get('/folders', getFolders);
+router.get('/emails/sent', getSentEmails);
+router.get('/emails/inbox', getInboxEmails);
+router.get('/emails/archived', getArchivedEmails);
+router.post('/emails/:id/archive', archiveEmail);
 
-    const response = await axios.post(
-      url,
-      { message },
-      {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-      }
-    );
+router.get('/check-configuration', checkConfiguration);
 
-    res.json({ success: true, data: response.data });
-  } catch (error) {
-    console.error(
-      "Erreur lors de l'envoi du message :",
-      error?.response?.data || error.message
-    );
-    res.status(error?.response?.status || 500).json({
-      error: "Échec de l'envoi du message",
-      details: error?.response?.data || error.message,
-    });
-  }
-});
-
-// Récupérer les deals
-router.get("/deals", getDeals);
-router.get("/deals/count", getDealsCount);
-
-// Récupérer les contacts
-router.get("/contacts", getContacts);
+router.get('/pipelines', getPipelines);
 
 module.exports = router;
