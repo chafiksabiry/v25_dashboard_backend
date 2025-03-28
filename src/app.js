@@ -21,12 +21,6 @@ const vertex = require('./routes/vertex');
 const zoho = require('./routes/zoho');
 
 
-
-
-
-
-
-
 // Connect to database
 connectDB()
   .then(() => {
