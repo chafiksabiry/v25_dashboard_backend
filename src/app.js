@@ -36,6 +36,11 @@ app.use(express.json());
 
 // Enable CORS
 
+app.use(cors({
+  origin: '*',
+  credentials: true,
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
+}));
 // Mount routers
 app.use('/api/auth', auth);
 app.use('/api/integrations', integrations);

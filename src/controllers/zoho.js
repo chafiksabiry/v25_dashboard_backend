@@ -176,6 +176,11 @@ const getChats = async (req, res) => {
           }
         );
 
+        if (response.data.error) {
+          console.error("Erreur dans la réponse SalesIQ:", response.data.error);
+          throw new Error(`Erreur SalesIQ: ${response.data.error.message}`);
+        }
+
         return response.data;
       } catch (apiError) {
         console.error("Erreur API détaillée:", {
@@ -187,9 +192,9 @@ const getChats = async (req, res) => {
 
         // Gestion spécifique des erreurs SalesIQ
         if (apiError.response?.status === 401) {
-          throw new Error("Token non autorisé pour SalesIQ");
+          throw new Error("Token non autorisé pour SalesIQ. Veuillez vérifier les scopes du token.");
         } else if (apiError.response?.status === 403) {
-          throw new Error("Permissions insuffisantes pour SalesIQ");
+          throw new Error("Permissions insuffisantes pour SalesIQ. Veuillez vérifier les autorisations.");
         } else if (apiError.message.includes("SalesIQ")) {
           throw apiError;
         }
@@ -220,19 +225,15 @@ const getChats = async (req, res) => {
     if (error.message === "Configuration_Required") {
       return res.status(401).json({
         success: false,
-        message:
-          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        message: "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
         requiresConfiguration: true,
       });
     }
 
-    if (
-      error.message === "Token_Refresh_Required" ||
-      error.message === "Token_Refresh_Failed"
-    ) {
+    if (error.message === "Token_Refresh_Failed") {
       return res.status(401).json({
         success: false,
-        message: "Rafraîchissement du token nécessaire. Veuillez reconfigurer.",
+        message: "Échec du rafraîchissement du token. Veuillez reconfigurer.",
         requiresConfiguration: true,
       });
     }
@@ -240,8 +241,7 @@ const getChats = async (req, res) => {
     res.status(error.response?.status || 500).json({
       success: false,
       message: error.message || "Erreur lors de la récupération des chats",
-      details:
-        error.response?.data || "Pas de détails supplémentaires disponibles",
+      details: error.response?.data || "Pas de détails supplémentaires disponibles",
     });
   }
 };
@@ -373,7 +373,7 @@ const getLeads = async (req, res) => {
 
     const result = await executeWithTokenRefresh(req, res, async (token) => {
       console.log("Appel API Zoho avec token");
-      const response = await axios.get(`${config.ZOHO_API_URL}/Deals`, {
+      const response = await axios.get("https://www.zohoapis.com/crm/v2/Deals", {
         headers: {
           Authorization: `Zoho-oauthtoken ${token}`,
           "Content-Type": "application/json",
@@ -385,12 +385,16 @@ const getLeads = async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error("Erreur complète getLeads:", error.message);
+    console.error("Détails de l'erreur:", {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+    });
 
     if (error.message === "Configuration_Required") {
       return res.status(401).json({
         success: false,
-        message:
-          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        message: "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
         requiresConfiguration: true,
       });
     }
@@ -403,10 +407,11 @@ const getLeads = async (req, res) => {
       });
     }
 
-    res.status(500).json({
+    res.status(error.response?.status || 500).json({
       success: false,
       message: "Erreur lors de la récupération des leads",
       error: error.message,
+      details: error.response?.data,
     });
   }
 };
