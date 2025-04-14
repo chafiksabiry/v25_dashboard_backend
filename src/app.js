@@ -123,9 +123,9 @@ app.use(express.json());
 
 // Enable CORS
 app.use(cors({
-  origin: 'http://localhost:5180', // L'origine de votre frontend
+  origin: '*',
   credentials: true,
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel'] // Ajoutez x-channel ici
+  allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
 }));
 
 // Mount routers
