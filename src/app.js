@@ -36,10 +36,16 @@ app.use(express.json());
 
 // Enable CORS
 
-app.use(cors({
+/* app.use(cors({
   origin: '*',
   credentials: true,
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
+})); */
+app.use(cors({
+  origin: ['http://localhost:5180','https://v25-preprod.harx.ai', 'https://preprod-api-dash-calls.harx.ai','https://v25.harx.ai'],
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
 }));
 // Mount routers
 app.use('/api/auth', auth);
