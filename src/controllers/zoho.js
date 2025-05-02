@@ -342,11 +342,28 @@ const getDeals = async (req, res) => {
   try {
     checkAuth(req);
 
+    const { page = 1, per_page = 11 } = req.query;
+
     const data = await executeWithTokenRefresh(req, res, async (token) => {
       const response = await axios.get(`${config.ZOHO_API_URL}/Deals`, {
         headers: { Authorization: `Zoho-oauthtoken ${token}` },
+        params: {
+          page: parseInt(page),
+          per_page: parseInt(per_page)
+        }
       });
-      return response.data;
+
+      // Calculer le nombre total de pages
+      const totalRecords = response.data.info.count;
+      const totalPages = Math.ceil(totalRecords / parseInt(per_page));
+
+      return {
+        data: response.data.data,
+        info: {
+          ...response.data.info,
+          total_pages: totalPages
+        }
+      };
     });
 
     res.json({ success: true, data });
@@ -371,6 +388,8 @@ const getLeads = async (req, res) => {
   try {
     checkAuth(req);
 
+    const { page = 1 } = req.query;
+
     const result = await executeWithTokenRefresh(req, res, async (token) => {
       console.log("Appel API Zoho avec token");
       const response = await axios.get("https://www.zohoapis.com/crm/v2/Deals", {
@@ -378,11 +397,25 @@ const getLeads = async (req, res) => {
           Authorization: `Zoho-oauthtoken ${token}`,
           "Content-Type": "application/json",
         },
+        params: {
+          page: parseInt(page)
+        }
       });
-      return response.data;
+
+      // Calculer le nombre total de pages
+      const totalRecords = response.data.info.count;
+      const totalPages = Math.ceil(totalRecords / 200); // Utilisation de la valeur par défaut de 200
+
+      return {
+        data: response.data.data,
+        info: {
+          ...response.data.info,
+          total_pages: totalPages
+        }
+      };
     });
 
-    res.json(result);
+    res.json({ success: true, data: result });
   } catch (error) {
     console.error("Erreur complète getLeads:", error.message);
     console.error("Détails de l'erreur:", {
@@ -409,7 +442,7 @@ const getLeads = async (req, res) => {
 
     res.status(error.response?.status || 500).json({
       success: false,
-      message: "Erreur lors de la récupération des leads",
+      message: "Erreur lors de la récupération des deals",
       error: error.message,
       details: error.response?.data,
     });
