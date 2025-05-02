@@ -23,9 +23,6 @@ const zoho = require('./routes/zoho');
 
 // Connect to database
 connectDB()
-  .then(() => {
-    fetchAndStoreChats(); // Lancement automatique après la connexion
-  })
   .catch((err) => console.error("Erreur lors de la connexion à la base de données :", err));
 
 
