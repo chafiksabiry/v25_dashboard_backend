@@ -391,15 +391,23 @@ const getLeads = async (req, res) => {
     const { page = 1 } = req.query;
 
     const result = await executeWithTokenRefresh(req, res, async (token) => {
-      console.log("Appel API Zoho avec token");
-      const response = await axios.get("https://www.zohoapis.com/crm/v2/Deals", {
+      // Construire la requête de base
+      const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
+      let url = baseURL;
+      let params = {
+        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
+        page: parseInt(page)
+      };
+
+      console.log("URL de requête:", url);
+      console.log("Paramètres:", params);
+
+      const response = await axios.get(url, {
+        params: params,
         headers: {
           Authorization: `Zoho-oauthtoken ${token}`,
           "Content-Type": "application/json",
         },
-        params: {
-          page: parseInt(page)
-        }
       });
 
       // Calculer le nombre total de pages
@@ -415,6 +423,7 @@ const getLeads = async (req, res) => {
       };
     });
 
+    console.log("Résultat de la recherche:", JSON.stringify(result, null, 2));
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Erreur complète getLeads:", error.message);
@@ -465,7 +474,7 @@ const saveLeads = async (req, res) => {
         const newLead = new Lead({
           name: lead.Full_Name,
           company: lead.Company,
-          email: lead.Email,
+          email: lead.Email_1,
           phone: lead.Phone,
           status: lead.Status || "new",
           source: "Zoho CRM",
@@ -928,21 +937,24 @@ const getLeadsByPipeline = async (req, res) => {
   console.log("Début de getLeadsByPipeline");
   try {
     checkAuth(req);
-    const { pipeline } = req.query;
+    const { pipeline, page = 1 } = req.query;
+
+    if (!pipeline) {
+      return res.status(400).json({
+        success: false,
+        message: "Le paramètre pipeline est requis"
+      });
+    }
 
     const result = await executeWithTokenRefresh(req, res, async (token) => {
       // Construire la requête de base
       const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
       let url = baseURL;
       let params = {
-        fields:
-          "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
+        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration,Email",
+        page: parseInt(page),
+        criteria: `(Pipeline:equals:${encodeURIComponent(pipeline)})`
       };
-
-      // Si un pipeline est spécifié, ajouter les paramètres de recherche
-      if (pipeline) {
-        params.criteria = `(Pipeline:equals:${pipeline})`;
-      }
 
       console.log("URL de requête:", url);
       console.log("Paramètres:", params);
@@ -955,20 +967,33 @@ const getLeadsByPipeline = async (req, res) => {
         },
       });
 
-      return response.data;
+      // Calculer le nombre total de pages
+      const totalRecords = response.data.info.count;
+      const totalPages = Math.ceil(totalRecords / 200); // Utilisation de la valeur par défaut de 200
+
+      return {
+        data: response.data.data,
+        info: {
+          ...response.data.info,
+          total_pages: totalPages
+        }
+      };
     });
 
     console.log("Résultat de la recherche:", JSON.stringify(result, null, 2));
-    res.json(result);
+    res.json({ success: true, data: result });
   } catch (error) {
     console.error("Erreur getLeadsByPipeline:", error.message);
-    console.error("Détails de l'erreur:", error.response?.data);
+    console.error("Détails de l'erreur:", {
+      status: error.response?.status,
+      statusText: error.response?.statusText,
+      data: error.response?.data,
+    });
 
     if (error.message === "Configuration_Required") {
       return res.status(401).json({
         success: false,
-        message:
-          "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        message: "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
         requiresConfiguration: true,
       });
     }
@@ -981,7 +1006,7 @@ const getLeadsByPipeline = async (req, res) => {
       });
     }
 
-    res.status(500).json({
+    res.status(error.response?.status || 500).json({
       success: false,
       message: "Erreur lors de la récupération des leads du pipeline",
       error: error.message,
