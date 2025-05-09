@@ -9,7 +9,12 @@ const cleanLeadData = (lead) => {
   const cleanedData = {};
   for (const [key, value] of Object.entries(lead)) {
     if (!key.startsWith('$')) {
-      cleanedData[key] = value;
+      // Gestion spéciale pour le champ Tag
+      if (key === 'Tag' && Array.isArray(value)) {
+        cleanedData[key] = value.map(tag => tag.name).join(', ');
+      } else {
+        cleanedData[key] = value;
+      }
     }
   }
   return cleanedData;
@@ -142,11 +147,11 @@ const fetchAllUsersLeads = async () => {
     await Promise.all(zohoConfigs.map(config => fetchUserLeads(config)));
     
     // Relancer immédiatement le processus
-    setImmediate(fetchAllUsersLeads);
+    setTimeout(fetchAllUsersLeads, 5 * 60 * 1000);
   } catch (error) {
     console.error("\nErreur lors de la récupération des leads:", error.message);
     // En cas d'erreur, on relance immédiatement
-    setImmediate(fetchAllUsersLeads);
+    setTimeout(fetchAllUsersLeads, 5 * 60 * 1000);
   }
 };
 

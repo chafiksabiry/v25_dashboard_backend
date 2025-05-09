@@ -1,15 +1,28 @@
 const { Lead } = require("../models/Lead");
+const mongoose = require("mongoose");
 
 // @desc    Get all leads
 // @route   GET /api/leads
 // @access  Private
 exports.getLeads = async (req, res) => {
   try {
-    const leads = await Lead.find().populate("assignedTo");
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    const leads = await Lead.find()
+      .populate("assignedTo")
+      .skip(skip)
+      .limit(limit);
+
+    const total = await Lead.countDocuments();
 
     res.status(200).json({
       success: true,
       count: leads.length,
+      total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
       data: leads,
     });
   } catch (err) {
@@ -23,13 +36,29 @@ exports.getLeads = async (req, res) => {
 // @desc    Get leads by user ID
 // @route   GET /api/leads/user/:userId
 // @access  Private
-
 exports.getLeadsByUserId = async (req, res) => {
   try {
+    const { userId } = req.params;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: "User ID is required"
+      });
+    }
+
+    // Validate if userId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(userId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid user ID format"
+      });
+    }
+
     const leads = await Lead.find({
       $or: [
-        { userId: req.params.userId },
-        { assignedTo: req.params.userId }
+        { userId: userId },
+        { assignedTo: userId }
       ]
     }).populate("assignedTo");
 
@@ -39,9 +68,10 @@ exports.getLeadsByUserId = async (req, res) => {
       data: leads,
     });
   } catch (err) {
+    console.error('Error in getLeadsByUserId:', err);
     res.status(400).json({
       success: false,
-      error: err.message,
+      error: err.message || "An error occurred while fetching leads"
     });
   }
 };
@@ -214,6 +244,38 @@ exports.generateScript = async (req, res) => {
     res.status(400).json({
       success: false,
       error: err.message,
+    });
+  }
+};
+
+// @desc    Get leads by pipeline and stage
+// @route   GET /api/leads/filter
+// @access  Private
+exports.getLeadsByPipelineAndStage = async (req, res) => {
+  try {
+    const { pipeline, stage } = req.query;
+
+    if (!pipeline || !stage) {
+      return res.status(400).json({
+        success: false,
+        message: "Pipeline and stage parameters are required"
+      });
+    }
+
+    const leads = await Lead.find({
+      Pipeline: pipeline,
+      Stage: stage
+    }).populate("assignedTo");
+
+    res.status(200).json({
+      success: true,
+      count: leads.length,
+      data: leads
+    });
+  } catch (err) {
+    res.status(400).json({
+      success: false,
+      error: err.message
     });
   }
 };
