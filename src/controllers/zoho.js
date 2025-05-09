@@ -388,42 +388,86 @@ const getLeads = async (req, res) => {
   try {
     checkAuth(req);
 
-    const { page = 1 } = req.query;
+    const { page = 1, modifiedSince } = req.query;
+    const pageSize = 250; // Taille maximale autorisée par Zoho
+    const delayBetweenRequests = 500; // 0.5 seconde de délai entre les requêtes
+
+    // Fonction pour ajouter un délai
+    const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
     const result = await executeWithTokenRefresh(req, res, async (token) => {
-      // Construire la requête de base
-      const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
-      let url = baseURL;
-      let params = {
-        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
-        page: parseInt(page)
-      };
+      let allLeads = [];
+      let currentPage = parseInt(page);
+      let hasMoreRecords = true;
+      let totalRecords = 0;
 
-      console.log("URL de requête:", url);
-      console.log("Paramètres:", params);
+      while (hasMoreRecords) {
+        console.log(`Récupération de la page ${currentPage}...`);
 
-      const response = await axios.get(url, {
-        params: params,
-        headers: {
-          Authorization: `Zoho-oauthtoken ${token}`,
-          "Content-Type": "application/json",
-        },
-      });
+        // Construire la requête de base
+        const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
+        let params = {
+          fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
+          page: currentPage,
+          per_page: pageSize
+        };
+
+        // Ajouter le filtre de date si spécifié
+        if (modifiedSince) {
+          params.criteria = `(Modified_Time:greater_than:${modifiedSince})`;
+        }
+
+        console.log("Paramètres de requête:", params);
+
+        const response = await axios.get(baseURL, {
+          params: params,
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        // Ajouter les leads de la page courante au tableau
+        if (response.data.data && Array.isArray(response.data.data)) {
+          allLeads = allLeads.concat(response.data.data);
+          totalRecords = response.data.info.count;
+          hasMoreRecords = response.data.info.more_records;
+          
+          console.log(`Page ${currentPage} récupérée: ${response.data.data.length} leads`);
+          console.log(`Total des leads récupérés jusqu'à présent: ${allLeads.length}`);
+        }
+
+        // Si on a plus de pages, on arrête
+        if (!hasMoreRecords) {
+          console.log("Plus de pages à récupérer");
+          break;
+        }
+
+        // Incrémenter la page
+        currentPage++;
+
+        // Ajouter un délai entre les requêtes pour éviter le rate limit
+        if (hasMoreRecords) {
+          console.log(`Attente de ${delayBetweenRequests}ms avant la prochaine requête...`);
+          await delay(delayBetweenRequests);
+        }
+      }
 
       // Calculer le nombre total de pages
-      const totalRecords = response.data.info.count;
-      const totalPages = Math.ceil(totalRecords / 200); // Utilisation de la valeur par défaut de 200
+      const totalPages = Math.ceil(totalRecords / pageSize);
 
       return {
-        data: response.data.data,
+        data: allLeads,
         info: {
-          ...response.data.info,
-          total_pages: totalPages
+          total_records: totalRecords,
+          total_pages: totalPages,
+          current_page: currentPage - 1,
+          per_page: pageSize
         }
       };
     });
 
-    console.log("Résultat de la recherche:", JSON.stringify(result, null, 2));
+    console.log(`Récupération terminée. Total des leads: ${result.data.length}`);
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Erreur complète getLeads:", error.message);
@@ -520,7 +564,7 @@ const getDealsCount = async (req, res) => {
         });
 
         hasMore = batchResults[batchResults.length - 1].data.info.more_records;
-        await new Promise((resolve) => setTimeout(resolve, 5000));
+        await new Promise((resolve) => setTimeout(resolve, 3000));
       }
 
       return { count: allDeals.length, deals: allDeals };
