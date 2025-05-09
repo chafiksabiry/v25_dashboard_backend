@@ -20,6 +20,32 @@ exports.getLeads = async (req, res) => {
   }
 };
 
+// @desc    Get leads by user ID
+// @route   GET /api/leads/user/:userId
+// @access  Private
+
+exports.getLeadsByUserId = async (req, res) => {
+  try {
+    const leads = await Lead.find({
+      $or: [
+        { userId: req.params.userId },
+        { assignedTo: req.params.userId }
+      ]
+    }).populate("assignedTo");
+
+    res.status(200).json({
+      success: true,
+      count: leads.length,
+      data: leads,
+    });
+  } catch (err) {
+    res.status(400).json({
+      success: false,
+      error: err.message,
+    });
+  }
+};
+
 // @desc    Get single lead
 // @route   GET /api/leads/:id
 // @access  Private

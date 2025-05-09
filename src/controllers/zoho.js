@@ -1,6 +1,6 @@
 const axios = require("axios");
 const { config } = require("../config/env");
-const { Lead } = require("../models/Lead");
+const LeadModel = require("../models/Lead");
 const ZohoConfig = require("../models/ZohoConfig");
 const mongoose = require("mongoose");
 
@@ -20,6 +20,14 @@ const refreshToken = async (app) => {
     }
 
     console.log("Rafraîchissement du token en cours...");
+    console.log("URL:", config.ZOHO_TOKEN_URL);
+    console.log("Paramètres:", {
+      refresh_token: zohoConfig.refreshToken.substring(0, 10) + "...",
+      client_id: zohoConfig.clientId.substring(0, 10) + "...",
+      client_secret: zohoConfig.clientSecret.substring(0, 10) + "...",
+      grant_type: "refresh_token",
+    });
+
     const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
       params: {
         refresh_token: zohoConfig.refreshToken,
@@ -40,10 +48,24 @@ const refreshToken = async (app) => {
   } catch (error) {
     console.error(
       "Erreur détaillée lors du rafraîchissement du token:",
-      error.response?.data || error.message,
-      error.stack
+      {
+        status: error.response?.status,
+        statusText: error.response?.statusText,
+        data: error.response?.data,
+        message: error.message
+      }
     );
-    throw new Error("Échec du rafraîchissement du token");
+
+    // Gestion spécifique des erreurs
+    if (error.response?.status === 400) {
+      if (error.response?.data?.error === "invalid_grant") {
+        throw new Error("Refresh token invalide ou expiré. Veuillez reconfigurer l'intégration Zoho.");
+      } else if (error.response?.data?.error === "invalid_client") {
+        throw new Error("Identifiants client invalides. Veuillez vérifier votre configuration Zoho.");
+      }
+    }
+
+    throw new Error(`Échec du rafraîchissement du token: ${error.response?.data?.error || error.message}`);
   }
 };
 
@@ -113,7 +135,11 @@ const executeWithTokenRefresh = async (req, res, apiCall) => {
       throw error;
     }
   } catch (error) {
-    console.error("Erreur dans executeWithTokenRefresh:", error.message);
+    console.error("Erreur dans executeWithTokenRefresh:", {
+      message: error.message,
+      status: error.response?.status,
+      data: error.response?.data
+    });
     throw error;
   }
 };
@@ -515,23 +541,42 @@ const saveLeads = async (req, res) => {
     const savedLeads = await Promise.all(
       leads.map(async (lead) => {
         console.log("Sauvegarde du lead:", lead);
-        const newLead = new Lead({
-          name: lead.Full_Name,
-          company: lead.Company,
-          email: lead.Email_1,
-          phone: lead.Phone,
-          status: lead.Status || "new",
-          source: "Zoho CRM",
-        });
-        return await newLead.save();
+        try {
+          const newLead = new LeadModel.Lead({
+            name: lead.Full_Name,
+            company: lead.Company,
+            email: lead.Email_1,
+            phone: lead.Phone,
+            status: lead.Status || "new",
+            source: "Zoho CRM",
+            userId: req.user?._id // Ajout de l'ID utilisateur si disponible
+          });
+          return await newLead.save();
+        } catch (saveError) {
+          console.error("Erreur lors de la sauvegarde du lead:", saveError);
+          return null;
+        }
       })
     );
 
-    console.log("Leads sauvegardés:", savedLeads);
-    res.status(201).json({ success: true, data: savedLeads });
+    // Filtrer les leads null (ceux qui n'ont pas pu être sauvegardés)
+    const successfulLeads = savedLeads.filter(lead => lead !== null);
+    console.log("Leads sauvegardés:", successfulLeads.length);
+    
+    res.status(201).json({ 
+      success: true, 
+      data: successfulLeads,
+      total: leads.length,
+      saved: successfulLeads.length,
+      failed: leads.length - successfulLeads.length
+    });
   } catch (error) {
     console.error("Erreur lors de la sauvegarde des leads:", error);
-    res.status(500).json({ message: "Erreur lors de la sauvegarde des leads" });
+    res.status(500).json({ 
+      success: false, 
+      message: "Erreur lors de la sauvegarde des leads",
+      error: error.message 
+    });
   }
 };
 
@@ -941,21 +986,33 @@ const updateLead = async (req, res) => {
 
     // Mettre à jour également dans la base de données locale si nécessaire
     try {
-      const updatedLead = await Lead.findOneAndUpdate(
-        { zohoId: id },
-        {
-          name: leadData.Full_Name,
-          company: leadData.Company,
-          email: leadData.Email,
-          phone: leadData.Phone,
-          status: leadData.Status || "updated",
-          // Autres champs à mettre à jour
-        },
-        { new: true }
+      const updateData = {
+        name: leadData.Full_Name,
+        company: leadData.Company,
+        email: leadData.Email_1,
+        phone: leadData.Phone,
+        status: leadData.Status || "updated",
+        updatedAt: new Date()
+      };
+
+      // Utiliser findOneAndUpdate avec le modèle correct
+      const updatedLead = await LeadModel.Lead.findOneAndUpdate(
+        updateData,
+        { 
+          new: true,
+          upsert: true, // Créer le document s'il n'existe pas
+          setDefaultsOnInsert: true // Appliquer les valeurs par défaut lors de la création
+        }
       );
+
+      if (!updatedLead) {
+        console.log(`Lead avec zohoId ${id} non trouvé dans la base de données locale`);
+      } else {
+        console.log(`Lead mis à jour avec succès: ${updatedLead._id}`);
+      }
     } catch (dbError) {
-      console.log(
-        "Lead mis à jour dans Zoho mais pas dans la base de données locale:",
+      console.error(
+        "Erreur lors de la mise à jour dans la base de données locale:",
         dbError
       );
     }
@@ -973,6 +1030,7 @@ const updateLead = async (req, res) => {
     res.status(500).json({
       success: false,
       message: "Erreur lors de la mise à jour du lead",
+      error: error.message
     });
   }
 };
@@ -1137,12 +1195,12 @@ const getTokenWithCredentials = async (req, res) => {
 
 const configureZohoCRM = async (req, res) => {
   console.log("Début de configureZohoCRM");
-  const { refreshToken, clientId, clientSecret } = req.body;
+  const { userId, refreshToken, clientId, clientSecret } = req.body;
 
-  if (!refreshToken || !clientId || !clientSecret) {
+  if (!userId || !refreshToken || !clientId || !clientSecret) {
     return res.status(400).json({
       success: false,
-      message: "refreshToken, clientId et clientSecret sont requis",
+      message: "userId, refreshToken, clientId et clientSecret sont requis",
     });
   }
 
@@ -1182,13 +1240,14 @@ const configureZohoCRM = async (req, res) => {
     const accessToken = response.data.access_token;
     console.log("Token initial obtenu avec succès");
 
-    // Supprimer l'ancienne configuration
+    // Supprimer l'ancienne configuration pour cet utilisateur
     console.log("Suppression de l'ancienne configuration...");
-    await ZohoConfig.deleteMany({});
+    await ZohoConfig.deleteMany({ userId });
 
     // Créer la nouvelle configuration
     console.log("Sauvegarde de la nouvelle configuration...");
     const zohoConfig = new ZohoConfig({
+      userId,
       refreshToken,
       clientId,
       clientSecret,
@@ -1203,11 +1262,6 @@ const configureZohoCRM = async (req, res) => {
     if (!savedConfig) {
       throw new Error("La configuration n'a pas été sauvegardée correctement");
     }
-
-    // Mettre à jour app.locals
-    req.app.locals.refreshToken = refreshToken;
-    req.app.locals.clientId = clientId;
-    req.app.locals.clientSecret = clientSecret;
 
     res.json({
       success: true,
@@ -1239,6 +1293,14 @@ const configureZohoCRM = async (req, res) => {
 const disconnect = async (req, res) => {
   console.log("Début de disconnect");
   try {
+    // Vérifier si l'utilisateur est authentifié
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({
+        success: false,
+        message: "Utilisateur non authentifié",
+      });
+    }
+
     // Révoquer le token d'accès actuel si présent
     const accessToken = req.headers.authorization?.split(" ")[1];
     if (accessToken) {
@@ -1260,8 +1322,8 @@ const disconnect = async (req, res) => {
       }
     }
 
-    // Supprimer la configuration de la base de données
-    await ZohoConfig.deleteMany({});
+    // Supprimer la configuration de l'utilisateur de la base de données
+    await ZohoConfig.deleteMany({ userId: req.user._id });
 
     res.json({
       success: true,
@@ -1276,27 +1338,17 @@ const disconnect = async (req, res) => {
   }
 };
 
-// Fonction utilitaire pour initialiser la configuration au démarrage du serveur
-const initializeZohoConfig = async (app) => {
-  try {
-    const zohoConfig = await ZohoConfig.findOne().sort({ lastUpdated: -1 });
-    if (zohoConfig) {
-      app.locals.refreshToken = zohoConfig.refreshToken;
-      app.locals.clientId = zohoConfig.clientId;
-      app.locals.clientSecret = zohoConfig.clientSecret;
-      console.log("Configuration Zoho chargée depuis la base de données");
-    }
-  } catch (error) {
-    console.error(
-      "Erreur lors de l'initialisation de la configuration Zoho:",
-      error
-    );
-  }
-};
-
 const checkConfiguration = async (req, res) => {
   try {
-    const config = await ZohoConfig.findOne().sort({ lastUpdated: -1 });
+    // Vérifier si l'utilisateur est authentifié
+    if (!req.user || !req.user._id) {
+      return res.status(401).json({
+        success: false,
+        message: "Utilisateur non authentifié",
+      });
+    }
+
+    const config = await ZohoConfig.findOne({ userId: req.user._id }).sort({ lastUpdated: -1 });
     if (!config) {
       return res.status(404).json({
         success: false,
@@ -1504,7 +1556,6 @@ module.exports = {
   getTokenWithCredentials,
   configureZohoCRM,
   disconnect,
-  initializeZohoConfig,
   checkConfiguration,
   getPipelines,
   archiveEmail,

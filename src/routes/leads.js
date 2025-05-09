@@ -9,6 +9,7 @@ const {
   deleteLead,
   analyzeLead,
   generateScript,
+  getLeadsByUserId,
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -101,5 +102,6 @@ router.route("/").get(getLeads).post(createLead);
 router.route("/:id").get(getLead).put(updateLead).delete(deleteLead);
 router.route("/:id/analyze").post(analyzeLead);
 router.route("/:id/generate-script").post(generateScript);
+router.route("/user/:userId").get(getLeadsByUserId);
 
 module.exports = router;
