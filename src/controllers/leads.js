@@ -254,6 +254,9 @@ exports.generateScript = async (req, res) => {
 exports.getLeadsByPipelineAndStage = async (req, res) => {
   try {
     const { pipeline, stage } = req.query;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
 
     if (!pipeline || !stage) {
       return res.status(400).json({
@@ -262,17 +265,35 @@ exports.getLeadsByPipelineAndStage = async (req, res) => {
       });
     }
 
-    const leads = await Lead.find({
+    // Build the query
+    const query = {
       Pipeline: pipeline,
       Stage: stage
-    }).populate("assignedTo");
+    };
+
+    // Get total count for pagination
+    const total = await Lead.countDocuments(query);
+
+    // Get paginated leads
+    const leads = await Lead.find(query)
+      .populate({
+        path: 'assignedTo',
+        select: 'name email', // Only select necessary fields
+        options: { lean: true } // Use lean queries for better performance
+      })
+      .skip(skip)
+      .limit(limit);
 
     res.status(200).json({
       success: true,
       count: leads.length,
+      total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
       data: leads
     });
   } catch (err) {
+    console.error('Error in getLeadsByPipelineAndStage:', err);
     res.status(400).json({
       success: false,
       error: err.message
