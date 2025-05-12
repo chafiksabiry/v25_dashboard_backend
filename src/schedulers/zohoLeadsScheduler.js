@@ -62,7 +62,7 @@ const fetchUserLeads = async (zohoConfig) => {
           "Content-Type": "application/json"
         },
         params: {
-          fields: "id,Deal_Name,Stage,Email_1,Owner,Pipeline,Contact_Name,Telephony,Created_Time,Modified_Time,Last_Activity_Time,Project_Tags,Nb_of_projects_Publish,$currency_symbol,$field_states,Activity,$sharing_permission,Activity_Tag,$state,$process_flow,$locked_for_me,$approved,$approval,Expected_Com_Pool,Created_Time,$wizard_connection_path,$editable,Payment,Targer_Countries,Created_By,Planning,$zia_owner_assignment,Date_d_inscription,Description,$review_process,$layout_id,Visualisation_du_planning,Modified_By,$review,Lead_Conversion_Time,Phone,Overall_Sales_Duration,leadchain0__Social_Lead_ID,$orchestration,Sales_Cycle_Duration,$in_merge,Locked__s,Tag,$approval_state,Location",
+          fields: "Deal_Name,Stage,Email_1,Pipeline,Contact_Name,Telephony, Last_Activity_Time,Project_Tags,Phone",
           page: page,
           per_page: pageSize
         }
