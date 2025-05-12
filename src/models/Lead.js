@@ -14,6 +14,10 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: true
   },
+  id: {
+    type: String,
+    required: true
+  },
   Project_Tags: { //
     type: [String],
     required: true
