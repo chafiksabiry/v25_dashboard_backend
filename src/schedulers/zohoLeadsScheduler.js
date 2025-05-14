@@ -142,19 +142,14 @@ const fetchAllUsersLeads = async () => {
 
     // Traiter les utilisateurs en parallèle
     await Promise.all(zohoConfigs.map(config => fetchUserLeads(config)));
-    
-    // Relancer immédiatement le processus
-    setTimeout(fetchAllUsersLeads, 2 * 60 * 60 * 1000);
   } catch (error) {
     console.error("\nErreur lors de la récupération des leads:", error.message);
-    // En cas d'erreur, on relance immédiatement
-    setTimeout(fetchAllUsersLeads, 2 * 60 * 60 * 1000);
   }
 };
 
 // Démarrer le scheduler
 const startZohoLeadsScheduler = () => {
-  // Exécuter immédiatement au démarrage
+  // Exécuter une seule fois au démarrage
   fetchAllUsersLeads();
 };
 

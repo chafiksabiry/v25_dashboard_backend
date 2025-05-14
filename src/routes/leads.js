@@ -44,10 +44,11 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
 
         // Mapping des colonnes du CSV vers les champs attendus
         const cleanedRow = {
-          name: row["name"] ? row["name"].trim() : "",
-          email: row["email"] ? row["email"].trim() : "",
-          phone: row["phone"] ? row["phone"].trim() : "",
-          company: row["company"] ? row["company"].trim() : "",
+          name: row["Deal_Name"] ? row["Deal_Name"].trim() : "",
+          email: row["Email_1"] ? row["Email_1"].trim() : "",
+          phone: row["Phone"] ? row["Phone"].trim() : "",
+          company: row["Pipeline"] ? row["Pipeline"].trim() : "",
+          stage: row["Stage"] ? row["Stage"].trim() : "",
         };
 
         console.log("Ligne après mapping :", cleanedRow);
