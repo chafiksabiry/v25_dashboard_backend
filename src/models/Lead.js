@@ -4,40 +4,42 @@ const leadSchema = new mongoose.Schema({
   userId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
-    required: true
+    required: false
   },
-  assignedTo: {
+  gigId: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'User'
+    ref: 'Gig',
+    required: false,
+    default: "6817b8f6e94050537b664d53"
   },
   refreshToken: {
     type: String,
-    required: true
+    required: false
   },
   id: {
     type: String,
-    required: true
+    required: false
   },
   Project_Tags: { //
     type: [String],
-    required: true
+    required: false
   },
   Last_Activity_Time: { //
     type: Date,
-    required: true
+    required: false
   },
   Activity_Tag: String, //
   Deal_Name: { //
     type: String,
-    required: true
+    required: false
   },
   Stage: { //
     type: String,
-    required: true
+    required: false
   },
   Email_1: { //
     type: String,
-    required: true,
+    required: false,
     validate: {
       validator: function(v) {
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
@@ -47,22 +49,15 @@ const leadSchema = new mongoose.Schema({
   },
   Phone: { //
     type: String,
-    required: true
+    required: false
   },
   Telephony: { //
     type: String,
-    required: true
-  },
-  Contact_Name: { //
-    name: {
-      type: String,
-      required: true
-    },
-    id: String
+    required: false
   },
   Pipeline: {
     type: String,
-    required: true
+    required: false
   },
   updatedAt: {
     type: Date,

@@ -62,7 +62,7 @@ const fetchUserLeads = async (zohoConfig) => {
           "Content-Type": "application/json"
         },
         params: {
-          fields: "Deal_Name,Stage,Email_1,Pipeline,Contact_Name,Telephony, Last_Activity_Time,Project_Tags,Phone",
+          fields: "Deal_Name,Stage,Email_1,Pipeline,Telephony, Last_Activity_Time,Project_Tags,Phone",
           page: page,
           per_page: pageSize
         }
@@ -100,9 +100,6 @@ const fetchUserLeads = async (zohoConfig) => {
               ...cleanLeadData(lead)
             };
 
-            if (!leadData.Deal_Name && leadData.Contact_Name?.name) {
-              leadData.Deal_Name = leadData.Contact_Name.name;
-            }
 
             await Lead.findOneAndUpdate(
               { 
@@ -147,11 +144,11 @@ const fetchAllUsersLeads = async () => {
     await Promise.all(zohoConfigs.map(config => fetchUserLeads(config)));
     
     // Relancer immédiatement le processus
-    setTimeout(fetchAllUsersLeads, 5 * 60 * 1000);
+    setTimeout(fetchAllUsersLeads, 2 * 60 * 60 * 1000);
   } catch (error) {
     console.error("\nErreur lors de la récupération des leads:", error.message);
     // En cas d'erreur, on relance immédiatement
-    setTimeout(fetchAllUsersLeads, 5 * 60 * 1000);
+    setTimeout(fetchAllUsersLeads, 2 * 60 * 60 * 1000);
   }
 };
 

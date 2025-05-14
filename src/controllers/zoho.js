@@ -433,7 +433,7 @@ const getLeads = async (req, res) => {
         // Construire la requête de base
         const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
         let params = {
-          fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
+          fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
           page: currentPage,
           per_page: pageSize
         };
@@ -1053,7 +1053,7 @@ const getLeadsByPipeline = async (req, res) => {
       const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
       let url = baseURL;
       let params = {
-        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Contact_Name,Description,Email,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration,Email",
+        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Description,Email,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration,Email",
         page: parseInt(page),
         criteria: `(Pipeline:equals:${encodeURIComponent(pipeline)})`
       };
