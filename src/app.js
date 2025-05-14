@@ -7,7 +7,7 @@ const { errorHandler } = require('./middleware/error');
 const { OAuth2Client } = require('google-auth-library');
 const axios = require('axios');
 const zohoRoutes = require('./routes/zoho');
-const { startZohoLeadsScheduler } = require('./schedulers/zohoLeadsScheduler');
+// const { startZohoLeadsScheduler } = require('./schedulers/zohoLeadsScheduler');
 
 // Route imports
 const auth = require('./routes/auth');
@@ -30,7 +30,7 @@ connectDB()
 // Démarrer le scheduler Zoho après la connexion à la base de données
 mongoose.connection.once('open', () => {
   console.log('Connecté à MongoDB');
-  startZohoLeadsScheduler();
+  // startZohoLeadsScheduler();
 });
 
 const app = express();
