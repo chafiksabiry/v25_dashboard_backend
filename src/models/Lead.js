@@ -20,10 +20,6 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false
   },
-  Project_Tags: { //
-    type: [String],
-    required: false
-  },
   Last_Activity_Time: { //
     type: Date,
     required: false

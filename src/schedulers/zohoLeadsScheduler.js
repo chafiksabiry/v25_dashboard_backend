@@ -62,7 +62,7 @@ const fetchUserLeads = async (zohoConfig) => {
           "Content-Type": "application/json"
         },
         params: {
-          fields: "Deal_Name,Stage,Email_1,Pipeline,Telephony, Last_Activity_Time,Project_Tags,Phone",
+          fields: "Deal_Name,Stage,Email_1,Pipeline,Telephony, Last_Activity_Time,Phone",
           page: page,
           per_page: pageSize
         }
