@@ -6,11 +6,15 @@ const leadSchema = new mongoose.Schema({
     ref: 'User',
     required: false
   },
+  assignedTo: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false
+  },
   gigId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Gig',
-    required: false,
-    default: "6817b8f6e94050537b664d53"
+    required: false
   },
   refreshToken: {
     type: String,

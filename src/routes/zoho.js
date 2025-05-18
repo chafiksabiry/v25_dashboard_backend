@@ -22,7 +22,10 @@ const {
   disconnect,
   checkConfiguration,
   getPipelines,
-  archiveEmail
+  archiveEmail,
+  syncAllLeads,
+  getZohoConfigById,
+  getAllZohoConfigs
 } = require("../controllers/zoho");
 
 const router = express.Router();
@@ -53,6 +56,7 @@ router.post('/disconnect', disconnect);
 router.get('/leads', getLeads);
 router.post('/leads', saveLeads);
 router.put('/leads/:id', updateLead);
+router.post('/leads/sync-all', syncAllLeads);
 router.get('/deals', getDeals);
 router.get('/deals/count', getDealsCount);
 router.get('/leads-by-pipeline', getLeadsByPipeline);
@@ -76,5 +80,8 @@ router.post('/emails/:id/archive', archiveEmail);
 router.get('/check-configuration', checkConfiguration);
 
 router.get('/pipelines', getPipelines);
+
+router.get('/config/:id', getZohoConfigById);
+router.get('/configs', getAllZohoConfigs);
 
 module.exports = router;

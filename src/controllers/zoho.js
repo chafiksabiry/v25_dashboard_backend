@@ -428,7 +428,7 @@ const getLeads = async (req, res) => {
       let totalRecords = 0;
 
       while (hasMoreRecords) {
-        console.log(`Récupération de la page ${currentPage}...`);
+        // console.log(`Récupération de la page ${currentPage}...`);
 
         // Construire la requête de base
         const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
@@ -443,7 +443,7 @@ const getLeads = async (req, res) => {
           params.criteria = `(Modified_Time:greater_than:${modifiedSince})`;
         }
 
-        console.log("Paramètres de requête:", params);
+        // console.log("Paramètres de requête:", params);
 
         const response = await axios.get(baseURL, {
           params: params,
@@ -459,8 +459,8 @@ const getLeads = async (req, res) => {
           totalRecords = response.data.info.count;
           hasMoreRecords = response.data.info.more_records;
           
-          console.log(`Page ${currentPage} récupérée: ${response.data.data.length} leads`);
-          console.log(`Total des leads récupérés jusqu'à présent: ${allLeads.length}`);
+          // console.log(`Page ${currentPage} récupérée: ${response.data.data.length} leads`);
+          // console.log(`Total des leads récupérés jusqu'à présent: ${allLeads.length}`);
         }
 
         // Si on a plus de pages, on arrête
@@ -474,7 +474,7 @@ const getLeads = async (req, res) => {
 
         // Ajouter un délai entre les requêtes pour éviter le rate limit
         if (hasMoreRecords) {
-          console.log(`Attente de ${delayBetweenRequests}ms avant la prochaine requête...`);
+          // console.log(`Attente de ${delayBetweenRequests}ms avant la prochaine requête...`);
           await delay(delayBetweenRequests);
         }
       }
@@ -493,7 +493,7 @@ const getLeads = async (req, res) => {
       };
     });
 
-    console.log(`Récupération terminée. Total des leads: ${result.data.length}`);
+    // console.log(`Récupération terminée. Total des leads: ${result.data.length}`);
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Erreur complète getLeads:", error.message);
@@ -549,7 +549,8 @@ const saveLeads = async (req, res) => {
             phone: lead.Phone,
             status: lead.Status || "new",
             source: "Zoho CRM",
-            userId: req.user?._id // Ajout de l'ID utilisateur si disponible
+            userId: lead.userId, // Ajout de l'ID utilisateur si disponible
+            gigId: lead.gigId // Ajout de l'ID du gig si disponible
           });
           return await newLead.save();
         } catch (saveError) {
@@ -995,26 +996,28 @@ const updateLead = async (req, res) => {
         updatedAt: new Date()
       };
 
-      // Utiliser findOneAndUpdate avec le modèle correct
+      // Utiliser findOneAndUpdate directement avec l'ID Zoho
       const updatedLead = await LeadModel.Lead.findOneAndUpdate(
-        updateData,
+        { id: leadData.id }, // Rechercher par l'ID Zoho
+        {
+          $set: {
+            ...leadData,
+            updatedAt: new Date()
+          }
+        },
         { 
           new: true,
-          upsert: true, // Créer le document s'il n'existe pas
-          setDefaultsOnInsert: true // Appliquer les valeurs par défaut lors de la création
+          upsert: true // Créer le document s'il n'existe pas
         }
       );
-
-      if (!updatedLead) {
-        console.log(`Lead avec zohoId ${id} non trouvé dans la base de données locale`);
-      } else {
-        console.log(`Lead mis à jour avec succès: ${updatedLead._id}`);
+      
+      if (updatedLead) {
+        console.log(`Lead ${leadData.id} traité avec succès. ID Zoho: ${updatedLead.id}`);
+        return updatedLead;
       }
-    } catch (dbError) {
-      console.error(
-        "Erreur lors de la mise à jour dans la base de données locale:",
-        dbError
-      );
+    } catch (updateError) {
+      console.error(`Erreur lors du traitement du lead ${leadData.id}:`, updateError);
+      throw updateError; // Propager l'erreur pour la gestion dans le bloc catch parent
     }
 
     res.json({ success: true, data });
@@ -1053,7 +1056,7 @@ const getLeadsByPipeline = async (req, res) => {
       const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
       let url = baseURL;
       let params = {
-        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Description,Email,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration,Email",
+        fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration,Email_1",
         page: parseInt(page),
         criteria: `(Pipeline:equals:${encodeURIComponent(pipeline)})`
       };
@@ -1255,10 +1258,10 @@ const configureZohoCRM = async (req, res) => {
     });
 
     await zohoConfig.save();
-    console.log("Configuration sauvegardée avec succès, ID:", zohoConfig._id);
+    console.log("Configuration sauvegardée avec succès, ID:", zohoConfig.id);
 
     // Vérifier que la configuration a bien été sauvegardée
-    const savedConfig = await ZohoConfig.findById(zohoConfig._id);
+    const savedConfig = await ZohoConfig.findById(zohoConfig.id);
     if (!savedConfig) {
       throw new Error("La configuration n'a pas été sauvegardée correctement");
     }
@@ -1267,7 +1270,7 @@ const configureZohoCRM = async (req, res) => {
       success: true,
       message: "Configuration Zoho CRM mise à jour avec succès",
       accessToken: accessToken,
-      configId: zohoConfig._id,
+      configId: zohoConfig.id,
     });
   } catch (error) {
     console.error("Erreur détaillée lors de la configuration:", {
@@ -1294,7 +1297,7 @@ const disconnect = async (req, res) => {
   console.log("Début de disconnect");
   try {
     // Vérifier si l'utilisateur est authentifié
-    if (!req.user || !req.user._id) {
+    if (!req.user || !req.user.id) {
       return res.status(401).json({
         success: false,
         message: "Utilisateur non authentifié",
@@ -1323,7 +1326,7 @@ const disconnect = async (req, res) => {
     }
 
     // Supprimer la configuration de l'utilisateur de la base de données
-    await ZohoConfig.deleteMany({ userId: req.user._id });
+    await ZohoConfig.deleteMany({ userId: req.user.id });
 
     res.json({
       success: true,
@@ -1341,14 +1344,14 @@ const disconnect = async (req, res) => {
 const checkConfiguration = async (req, res) => {
   try {
     // Vérifier si l'utilisateur est authentifié
-    if (!req.user || !req.user._id) {
+    if (!req.userId) {
       return res.status(401).json({
         success: false,
         message: "Utilisateur non authentifié",
       });
     }
 
-    const config = await ZohoConfig.findOne({ userId: req.user._id }).sort({ lastUpdated: -1 });
+    const config = await ZohoConfig.findOne({ userId: req.usrId }).sort({ lastUpdated: -1 });
     if (!config) {
       return res.status(404).json({
         success: false,
@@ -1537,6 +1540,573 @@ const archiveEmail = async (req, res) => {
   }
 };
 
+const syncAllLeads = async (req, res) => {
+  console.log("=== DÉBUT DE LA SYNCHRONISATION DES LEADS ===");
+  console.log("Informations de la requête:", {
+    userId: req.lead?.userId,
+    gigId: req.lead?.gigId,
+    authToken: req.headers.authorization ? "Présent" : "Absent",
+    cookies: req.cookies,
+    body: req.body,
+    headers: {
+      ...req.headers,
+      authorization: req.headers.authorization ? "Présent" : "Absent"
+    }
+  });
+
+  // Vérifier et définir les valeurs par défaut
+  const userId = req.body?.userId;
+  const gigId = req.body?.gigId;
+
+  console.log("Valeurs finales utilisées:", {
+    userId,
+    gigId,
+    source: {
+      fromBody: req.body?.userId,
+      fromBodyGig: req.body?.gigId
+    }
+  });
+
+  try {
+    checkAuth(req);
+    let totalSaved = 0;
+    let totalFailed = 0;
+    let failedLeads = []; // Pour stocker les détails des échecs
+
+    // Récupérer et sauvegarder les leads page par page
+    const result = await executeWithTokenRefresh(req, res, async (token) => {
+      let currentPage = 1;
+      let hasMoreRecords = true;
+      let totalRecords = 0;
+      const pageSize = 250;
+      const delayBetweenRequests = 500;
+
+      console.log("Début de la récupération des leads depuis Zoho");
+      console.log("Configuration:", {
+        pageSize,
+        delayBetweenRequests,
+        baseURL: "https://www.zohoapis.com/crm/v2.1/Deals"
+      });
+
+      while (hasMoreRecords) {
+        console.log(`\nTraitement de la page ${currentPage}...`);
+        
+        const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
+        const params = {
+          fields: "Deal_Name,Stage,Pipeline,Email_1,Phone,Last_Activity_Time,Activity_Tag",
+          page: currentPage,
+          per_page: pageSize
+        };
+
+        console.log("Paramètres de la requête:", params);
+
+        const response = await axios.get(baseURL, {
+          params: params,
+          headers: {
+            Authorization: `Zoho-oauthtoken ${token}`,
+            "Content-Type": "application/json",
+          },
+        });
+
+        if (response.data.data && Array.isArray(response.data.data)) {
+          const leadsInPage = response.data.data.length;
+          console.log(`Leads récupérés dans cette page: ${leadsInPage}`);
+          
+          // Sauvegarder immédiatement les leads de cette page
+          console.log(`\nSauvegarde des ${leadsInPage} leads de la page ${currentPage}...`);
+          
+          const savedLeads = await Promise.all(
+            response.data.data.map(async (lead, index) => {
+              try {
+                console.log(`Traitement du lead ${index + 1}/${leadsInPage} de la page ${currentPage}`);
+                
+                // Nettoyer et préparer les données du lead
+                const leadData = {
+                  userId: userId,
+                  gigId: gigId,
+                  Deal_Name: lead.Deal_Name,
+                  Stage: lead.Stage,
+                  Phone: lead.Phone,
+                  Pipeline: lead.Pipeline,
+                  Last_Activity_Time: lead.Last_Activity_Time,
+                  Activity_Tag: lead.Activity_Tag,
+                  id: lead.id,
+                  refreshToken: req.headers.authorization?.split(" ")[1]
+                };
+
+                console.log("Données du lead avant traitement:", {
+                  originalLead: {
+                    userId: lead.userId,
+                    gigId: lead.gigId
+                  },
+                  finalLeadData: {
+                    userId: leadData.userId,
+                    gigId: leadData.gigId
+                  },
+                  source: {
+                    fromFunction: { userId, gigId },
+                    fromBody: req.body
+                  }
+                });
+
+                // Gérer le cas où l'email est dans Deal_Name
+                if (!lead.Email_1 && lead.Deal_Name && lead.Deal_Name.includes('@')) {
+                  console.log(`Email trouvé dans Deal_Name: ${lead.Deal_Name}`);
+                  leadData.Email_1 = lead.Deal_Name;
+                  // Extraire le nom du Deal_Name si possible
+                  const nameParts = lead.Deal_Name.split('@')[0];
+                  if (nameParts) {
+                    leadData.Deal_Name = nameParts.replace(/[._]/g, ' ');
+                  }
+                } else {
+                  leadData.Email_1 = lead.Email_1 || 'no-email@placeholder.com'; // Valeur par défaut si Email_1 est null
+                }
+
+                console.log("Données nettoyées du lead:", {
+                  Deal_Name: leadData.Deal_Name,
+                  Stage: leadData.Stage,
+                  Email_1: leadData.Email_1,
+                  Pipeline: leadData.Pipeline,
+                  Phone: leadData.Phone,
+                  Last_Activity_Time: leadData.Last_Activity_Time,
+                  Activity_Tag: leadData.Activity_Tag,
+                  userId: leadData.userId,
+                  gigId: leadData.gigId,
+                  id: leadData.id
+                });
+
+                // Vérifier si un lead avec le même ID Zoho existe déjà
+                if (leadData.id) {
+                  try {
+                    // Première tentative de sauvegarde
+                    let updatedLead = await LeadModel.Lead.findOneAndUpdate(
+                      { id: leadData.id },
+                      {
+                        $set: {
+                          ...leadData,
+                          userId: userId,
+                          gigId: gigId,
+                          updatedAt: new Date()
+                        }
+                      },
+                      { 
+                        new: true,
+                        upsert: true
+                      }
+                    );
+
+                    // Fonction de vérification réutilisable
+                    const verifyLead = async (leadId, maxAttempts = 5) => {
+                      let attempts = 0;
+                      let savedLead = null;
+                      
+                      while (!savedLead && attempts < maxAttempts) {
+                        try {
+                          savedLead = await LeadModel.Lead.findOne({ id: leadId });
+                          if (!savedLead) {
+                            attempts++;
+                            if (attempts < maxAttempts) {
+                              const delay = Math.min(1000, 200 * Math.pow(2, attempts - 1));
+                              console.log(`Tentative ${attempts + 1}/${maxAttempts} pour le lead ${leadId}, attente de ${delay}ms...`);
+                              await new Promise(resolve => setTimeout(resolve, delay));
+                            }
+                          }
+                        } catch (findError) {
+                          console.error(`Erreur lors de la tentative ${attempts + 1} pour le lead ${leadId}:`, findError);
+                          attempts++;
+                          if (attempts < maxAttempts) {
+                            await new Promise(resolve => setTimeout(resolve, 500));
+                          }
+                        }
+                      }
+                      return { savedLead, attempts };
+                    };
+
+                    // Première série de vérifications
+                    let { savedLead, attempts } = await verifyLead(leadData.id);
+
+                    // Si le lead n'est pas trouvé, essayer une deuxième fois avec un délai plus long
+                    if (!savedLead) {
+                      console.log(`Première série de vérifications échouée pour le lead ${leadData.id}, tentative de récupération...`);
+                      await new Promise(resolve => setTimeout(resolve, 2000));
+                      
+                      // Deuxième tentative de sauvegarde
+                      updatedLead = await LeadModel.Lead.findOneAndUpdate(
+                        { id: leadData.id },
+                        {
+                          $set: {
+                            ...leadData,
+                            updatedAt: new Date()
+                          }
+                        },
+                        { 
+                          new: true,
+                          upsert: true
+                        }
+                      );
+
+                      // Deuxième série de vérifications
+                      const secondCheck = await verifyLead(leadData.id, 3);
+                      savedLead = secondCheck.savedLead;
+                      attempts += secondCheck.attempts;
+                    }
+
+                    // Vérification finale
+                    if (!savedLead) {
+                      console.log(`Tentative de vérification finale pour le lead ${leadData.id}...`);
+                      await new Promise(resolve => setTimeout(resolve, 3000));
+                      
+                      // Dernière tentative de sauvegarde
+                      updatedLead = await LeadModel.Lead.findOneAndUpdate(
+                        { id: leadData.id },
+                        {
+                          $set: {
+                            ...leadData,
+                            updatedAt: new Date()
+                          }
+                        },
+                        { 
+                          new: true,
+                          upsert: true
+                        }
+                      );
+
+                      // Vérification finale
+                      savedLead = await LeadModel.Lead.findOne({ id: leadData.id });
+                    }
+
+                    if (savedLead) {
+                      console.log(`Lead ${leadData.id} traité avec succès après ${attempts} tentatives. ID Zoho: ${savedLead.id}`);
+                      totalSaved++;
+                      return savedLead;
+                    } else {
+                      console.error(`Lead ${leadData.id} non trouvé après toutes les tentatives de vérification`);
+                      totalFailed++;
+                      failedLeads.push({
+                        page: currentPage,
+                        index: index + 1,
+                        leadId: leadData.id,
+                        error: `Lead non trouvé après ${attempts} tentatives de vérification`,
+                        data: leadData,
+                        attempts: attempts,
+                        lastAttempt: new Date(),
+                        status: 'failed'
+                      });
+
+                      // Sauvegarde d'urgence dans une collection séparée
+                      try {
+                        const emergencyLead = new LeadModel.Lead({
+                          ...leadData,
+                          status: 'emergency_save',
+                          saveAttempts: attempts,
+                          lastAttempt: new Date()
+                        });
+                        await emergencyLead.save();
+                        console.log(`Lead ${leadData.id} sauvegardé en mode urgence`);
+                      } catch (emergencyError) {
+                        console.error(`Échec de la sauvegarde d'urgence pour le lead ${leadData.id}:`, emergencyError);
+                      }
+
+                      return null;
+                    }
+                  } catch (updateError) {
+                    console.error(`Erreur lors du traitement du lead ${leadData.id}:`, updateError);
+                    totalFailed++;
+                    failedLeads.push({
+                      page: currentPage,
+                      index: index + 1,
+                      leadId: leadData.id,
+                      error: updateError.message,
+                      data: leadData,
+                      timestamp: new Date(),
+                      status: 'error'
+                    });
+                    return null;
+                  }
+                }
+
+                // Si on arrive ici, c'est qu'il n'y a pas d'ID Zoho
+                try {
+                  const newLead = new LeadModel.Lead(leadData);
+                  const savedLead = await newLead.save();
+                  
+                  // Attendre un court instant pour laisser le temps à MongoDB de finaliser l'opération
+                  await new Promise(resolve => setTimeout(resolve, 200));
+                  
+                  // Vérifier que le lead a bien été sauvegardé avec plusieurs tentatives
+                  let verifiedLead = null;
+                  let attempts = 0;
+                  const maxAttempts = 5; // Augmentation du nombre de tentatives
+                  
+                  while (!verifiedLead && attempts < maxAttempts) {
+                    try {
+                      verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
+                      if (!verifiedLead) {
+                        attempts++;
+                        if (attempts < maxAttempts) {
+                          // Délai exponentiel entre les tentatives
+                          const delay = Math.min(1000, 200 * Math.pow(2, attempts - 1));
+                          console.log(`Tentative ${attempts + 1}/${maxAttempts} pour le nouveau lead, attente de ${delay}ms...`);
+                          await new Promise(resolve => setTimeout(resolve, delay));
+                        }
+                      }
+                    } catch (findError) {
+                      console.error(`Erreur lors de la tentative ${attempts + 1} pour le nouveau lead:`, findError);
+                      attempts++;
+                      if (attempts < maxAttempts) {
+                        await new Promise(resolve => setTimeout(resolve, 500));
+                      }
+                    }
+                  }
+
+                  if (verifiedLead) {
+                    console.log(`Nouveau lead sauvegardé avec succès. ID Zoho: ${savedLead.id}`);
+                    totalSaved++;
+                    return savedLead;
+                  } else {
+                    // Dernière tentative avec un délai plus long
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                    const finalCheck = await LeadModel.Lead.findOne({ _id: savedLead._id });
+                    
+                    if (finalCheck) {
+                      console.log(`Nouveau lead trouvé lors de la vérification finale. ID Zoho: ${finalCheck.id}`);
+                      totalSaved++;
+                      return finalCheck;
+                    } else {
+                      console.error(`Nouveau lead non trouvé après ${maxAttempts} tentatives et vérification finale`);
+                      totalFailed++;
+                      failedLeads.push({
+                        page: currentPage,
+                        index: index + 1,
+                        leadId: leadData.id,
+                        error: `Nouveau lead non trouvé après ${maxAttempts} tentatives et vérification finale`,
+                        data: leadData,
+                        attempts: attempts,
+                        lastAttempt: new Date()
+                      });
+                      return null;
+                    }
+                  }
+                } catch (saveError) {
+                  console.error(`Erreur lors de la sauvegarde du nouveau lead:`, saveError);
+                  totalFailed++;
+                  failedLeads.push({
+                    page: currentPage,
+                    index: index + 1,
+                    leadId: leadData.id,
+                    error: saveError.message,
+                    data: leadData,
+                    timestamp: new Date()
+                  });
+                  return null;
+                }
+              } catch (saveError) {
+                console.error(`Erreur lors de la sauvegarde du lead ${index + 1} de la page ${currentPage}:`, {
+                  error: saveError.message,
+                  leadData: {
+                    Deal_Name: lead.Deal_Name,
+                    Email_1: lead.Email_1,
+                    id: lead.id
+                  }
+                });
+                
+                // Enregistrer les détails de l'échec
+                failedLeads.push({
+                  page: currentPage,
+                  index: index + 1,
+                  leadId: lead.id,
+                  error: saveError.message,
+                  data: {
+                    Deal_Name: lead.Deal_Name,
+                    Email_1: lead.Email_1
+                  }
+                });
+                
+                totalFailed++;
+                return null;
+              }
+            })
+          );
+
+          console.log(`\nRésumé de la page ${currentPage}:`, {
+            totalLeads: leadsInPage,
+            saved: savedLeads.filter(lead => lead !== null).length,
+            failed: savedLeads.filter(lead => lead === null).length
+          });
+
+          totalRecords = response.data.info.count;
+          hasMoreRecords = response.data.info.more_records;
+          
+          console.log("Statut actuel:", {
+            totalSaved,
+            totalFailed,
+            totalRecords,
+            hasMoreRecords
+          });
+        }
+
+        if (!hasMoreRecords) {
+          console.log("Plus de pages à traiter");
+          break;
+        }
+
+        currentPage++;
+        console.log(`Attente de ${delayBetweenRequests}ms avant la prochaine requête...`);
+        await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
+      }
+
+      console.log("\n=== RÉSUMÉ FINAL DE LA SYNCHRONISATION ===");
+      console.log("Statistiques:", {
+        totalSaved,
+        totalFailed,
+        totalRecords,
+        pagesProcessed: currentPage - 1
+      });
+
+      // Afficher les détails des échecs
+      if (failedLeads.length > 0) {
+        console.log("\nDétails des leads qui ont échoué:", failedLeads);
+      }
+
+      // À la fin de la synchronisation, vérifier le nombre réel de leads dans la base de données
+      const actualLeadCount = await LeadModel.Lead.countDocuments();
+      console.log("\n=== VÉRIFICATION FINALE ===");
+      console.log("Nombre réel de leads dans la base de données:", actualLeadCount);
+      console.log("Nombre déclaré de leads sauvegardés:", totalSaved);
+      console.log("Différence:", totalSaved - actualLeadCount);
+
+      return {
+        info: {
+          total_records: totalRecords,
+          total_pages: currentPage - 1,
+          total_saved: totalSaved,
+          total_failed: totalFailed,
+          actual_lead_count: actualLeadCount,
+          failed_leads: failedLeads
+        }
+      };
+    });
+
+    res.status(200).json({
+      success: true,
+      data: {
+        sync_info: result.info
+      }
+    });
+  } catch (error) {
+    console.error("\n=== ERREUR LORS DE LA SYNCHRONISATION ===");
+    console.error("Détails de l'erreur:", {
+      message: error.message,
+      stack: error.stack,
+      response: error.response?.data
+    });
+    
+    if (error.message === "Configuration_Required") {
+      return res.status(401).json({
+        success: false,
+        message: "Configuration Zoho CRM requise. Veuillez configurer via /api/zoho/configure",
+        requiresConfiguration: true,
+      });
+    }
+
+    if (error.message === "Token_Refresh_Failed") {
+      return res.status(401).json({
+        success: false,
+        message: "Échec du rafraîchissement du token. Veuillez reconfigurer.",
+        requiresConfiguration: true,
+      });
+    }
+
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la synchronisation des leads",
+      error: error.message
+    });
+  }
+};
+
+const getZohoConfigById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    console.log("userId reçu:", id);
+    console.log("Type de userId:", typeof id);
+    console.log("Longueur de userId:", id.length);
+    
+    // Vérifier si l'ID est un ObjectId valide
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      console.log("userId invalide détecté");
+      return res.status(400).json({
+        success: false,
+        message: "userId invalide",
+        details: {
+          receivedId: id,
+          expectedFormat: "24 caractères hexadécimaux"
+        }
+      });
+    }
+
+    // Rechercher la configuration par userId
+    const config = await ZohoConfig.findOne({ userId: id }).sort({ lastUpdated: -1 });
+    console.log("Configuration trouvée:", config ? "Oui" : "Non");
+    
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        message: "Configuration non trouvée pour cet utilisateur",
+        details: {
+          searchedUserId: id
+        }
+      });
+    }
+
+    // Ne pas renvoyer les informations sensibles
+    const safeConfig = {
+      id: config._id,
+      userId: config.userId,
+      lastUpdated: config.lastUpdated
+    };
+
+    res.json({
+      success: true,
+      data: safeConfig
+    });
+  } catch (error) {
+    console.error("Erreur lors de la récupération de la configuration:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération de la configuration",
+      error: error.message
+    });
+  }
+};
+
+const getAllZohoConfigs = async (req, res) => {
+  try {
+    const configs = await ZohoConfig.find().sort({ lastUpdated: -1 });
+    
+    // Ne pas renvoyer les informations sensibles
+    const safeConfigs = configs.map(config => ({
+      id: config._id,
+      userId: config.userId,
+      lastUpdated: config.lastUpdated
+    }));
+
+    res.json({
+      success: true,
+      data: safeConfigs,
+      count: safeConfigs.length
+    });
+  } catch (error) {
+    console.error("Erreur lors de la récupération des configurations:", error);
+    res.status(500).json({
+      success: false,
+      message: "Erreur lors de la récupération des configurations",
+      error: error.message
+    });
+  }
+};
+
 module.exports = {
   refreshToken,
   getLeads,
@@ -1560,4 +2130,7 @@ module.exports = {
   getPipelines,
   archiveEmail,
   getSalesIQPortalName,
+  syncAllLeads,
+  getZohoConfigById,
+  getAllZohoConfigs
 };

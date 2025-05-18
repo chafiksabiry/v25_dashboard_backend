@@ -107,7 +107,15 @@ exports.getLead = async (req, res) => {
 // @access  Private
 exports.createLead = async (req, res) => {
   try {
-    const lead = await Lead.create(req.body);
+    // Extraire userId et gigId de la requête
+    const { userId, gigId, ...leadData } = req.body;
+
+    // Créer le lead avec tous les champs
+    const lead = await Lead.create({
+      ...leadData,
+      userId: userId || req.user?._id, // Utiliser userId de la requête ou l'ID de l'utilisateur connecté
+      gigId: gigId || req.gig?._id // Utiliser gigId de la requête ou l'ID du gig actuel
+    });
 
     res.status(201).json({
       success: true,
@@ -126,17 +134,32 @@ exports.createLead = async (req, res) => {
 // @access  Private
 exports.updateLead = async (req, res) => {
   try {
-    const lead = await Lead.findByIdAndUpdate(req.params.id, req.body, {
-      new: true,
-      runValidators: true,
-    });
+    // Extraire userId et gigId de la requête
+    const { userId, gigId, ...updateData } = req.body;
 
-    if (!lead) {
+    // Trouver d'abord le lead existant
+    const existingLead = await Lead.findById(req.params.id);
+    
+    if (!existingLead) {
       return res.status(404).json({
         success: false,
         error: "Lead not found",
       });
     }
+
+    // Mettre à jour le lead en préservant userId et gigId
+    const lead = await Lead.findByIdAndUpdate(
+      req.params.id,
+      {
+        ...updateData,
+        userId: userId || existingLead.userId, // Préserver l'userId existant si non fourni
+        gigId: gigId || existingLead.gigId // Préserver le gigId existant si non fourni
+      },
+      {
+        new: true,
+        runValidators: true,
+      }
+    );
 
     res.status(200).json({
       success: true,
@@ -294,6 +317,62 @@ exports.getLeadsByPipelineAndStage = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in getLeadsByPipelineAndStage:', err);
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
+
+// @desc    Get leads by gig ID
+// @route   GET /api/leads/gig/:gigId
+// @access  Private
+exports.getLeadsByGigId = async (req, res) => {
+  try {
+    const { gigId } = req.params;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 50;
+    const skip = (page - 1) * limit;
+
+    if (!gigId) {
+      return res.status(400).json({
+        success: false,
+        message: "Gig ID is required"
+      });
+    }
+
+    // Validate if gigId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(gigId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid gig ID format"
+      });
+    }
+
+    // Get total count for pagination
+    const total = await Lead.countDocuments({ gigId });
+
+    // Get paginated leads
+    const leads = await Lead.find({ gigId })
+      .populate({
+        path: 'assignedTo',
+        select: 'name email',
+        options: { lean: true }
+      })
+      .select('_id id Activity_Tag Deal_Name Email_1 Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
+      .skip(skip)
+      .limit(limit);
+
+    res.status(200).json({
+      success: true,
+      count: leads.length,
+      total,
+      totalPages: Math.ceil(total / limit),
+      currentPage: page,
+      data: leads
+    });
+  } catch (err) {
+    console.error('Error in getLeadsByGigId:', err);
     res.status(400).json({
       success: false,
       error: err.message

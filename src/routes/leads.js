@@ -10,7 +10,8 @@ const {
   analyzeLead,
   generateScript,
   getLeadsByUserId,
-  getLeadsByPipelineAndStage
+  getLeadsByPipelineAndStage,
+  getLeadsByGigId
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -106,6 +107,8 @@ router.route("/:id/analyze").post(analyzeLead);
 router.route("/:id/generate-script").post(generateScript);
 router.route("/user/:userId").get(getLeadsByUserId);
 router.route("/filter").get(getLeadsByPipelineAndStage);
+router.route("/gig/:gigId").get(getLeadsByGigId);
+
 
 
 module.exports = router;
