@@ -550,7 +550,8 @@ const saveLeads = async (req, res) => {
             status: lead.Status || "new",
             source: "Zoho CRM",
             userId: lead.userId, // Ajout de l'ID utilisateur si disponible
-            gigId: lead.gigId // Ajout de l'ID du gig si disponible
+            gigId: lead.gigId, // Ajout de l'ID du gig si disponible
+            companyId: req.body?.companyId, // Ajout du companyId
           });
           return await newLead.save();
         } catch (saveError) {
@@ -1198,12 +1199,12 @@ const getTokenWithCredentials = async (req, res) => {
 
 const configureZohoCRM = async (req, res) => {
   console.log("Début de configureZohoCRM");
-  const { userId, refreshToken, clientId, clientSecret } = req.body;
+  const { userId, companyId, refreshToken, clientId, clientSecret } = req.body;
 
-  if (!userId || !refreshToken || !clientId || !clientSecret) {
+  if (!userId || !companyId || !refreshToken || !clientId || !clientSecret) {
     return res.status(400).json({
       success: false,
-      message: "userId, refreshToken, clientId et clientSecret sont requis",
+      message: "userId, companyId, refreshToken, clientId et clientSecret sont requis",
     });
   }
 
@@ -1243,14 +1244,15 @@ const configureZohoCRM = async (req, res) => {
     const accessToken = response.data.access_token;
     console.log("Token initial obtenu avec succès");
 
-    // Supprimer l'ancienne configuration pour cet utilisateur
+    // Supprimer l'ancienne configuration pour cet utilisateur et cette entreprise
     console.log("Suppression de l'ancienne configuration...");
-    await ZohoConfig.deleteMany({ userId });
+    await ZohoConfig.deleteMany({ userId, companyId });
 
     // Créer la nouvelle configuration
     console.log("Sauvegarde de la nouvelle configuration...");
     const zohoConfig = new ZohoConfig({
       userId,
+      companyId,
       refreshToken,
       clientId,
       clientSecret,
@@ -1545,6 +1547,7 @@ const syncAllLeads = async (req, res) => {
   console.log("Informations de la requête:", {
     userId: req.lead?.userId,
     gigId: req.lead?.gigId,
+    
     authToken: req.headers.authorization ? "Présent" : "Absent",
     cookies: req.cookies,
     body: req.body,
@@ -1624,6 +1627,7 @@ const syncAllLeads = async (req, res) => {
                 const leadData = {
                   userId: userId,
                   gigId: gigId,
+                  companyId: req.body?.companyId,
                   Deal_Name: lead.Deal_Name,
                   Stage: lead.Stage,
                   Phone: lead.Phone,
@@ -2028,8 +2032,10 @@ const syncAllLeads = async (req, res) => {
 const getZohoConfigById = async (req, res) => {
   try {
     const { id } = req.params;
+    const { companyId } = req.query;
     
     console.log("userId reçu:", id);
+    console.log("companyId reçu:", companyId);
     console.log("Type de userId:", typeof id);
     console.log("Longueur de userId:", id.length);
     
@@ -2046,16 +2052,29 @@ const getZohoConfigById = async (req, res) => {
       });
     }
 
-    // Rechercher la configuration par userId
-    const config = await ZohoConfig.findOne({ userId: id }).sort({ lastUpdated: -1 });
+    // Vérifier si companyId est fourni et valide
+    if (!companyId || !mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.status(400).json({
+        success: false,
+        message: "companyId invalide ou manquant",
+        details: {
+          receivedCompanyId: companyId,
+          expectedFormat: "24 caractères hexadécimaux"
+        }
+      });
+    }
+
+    // Rechercher la configuration par userId et companyId
+    const config = await ZohoConfig.findOne({ userId: id, companyId }).sort({ lastUpdated: -1 });
     console.log("Configuration trouvée:", config ? "Oui" : "Non");
     
     if (!config) {
       return res.status(404).json({
         success: false,
-        message: "Configuration non trouvée pour cet utilisateur",
+        message: "Configuration non trouvée pour cet utilisateur et cette entreprise",
         details: {
-          searchedUserId: id
+          searchedUserId: id,
+          searchedCompanyId: companyId
         }
       });
     }
@@ -2064,6 +2083,7 @@ const getZohoConfigById = async (req, res) => {
     const safeConfig = {
       id: config._id,
       userId: config.userId,
+      companyId: config.companyId,
       lastUpdated: config.lastUpdated
     };
 
@@ -2083,12 +2103,18 @@ const getZohoConfigById = async (req, res) => {
 
 const getAllZohoConfigs = async (req, res) => {
   try {
-    const configs = await ZohoConfig.find().sort({ lastUpdated: -1 });
+    const { companyId } = req.query;
+    
+    // Construire la requête en fonction de la présence de companyId
+    const query = companyId ? { companyId } : {};
+    
+    const configs = await ZohoConfig.find(query).sort({ lastUpdated: -1 });
     
     // Ne pas renvoyer les informations sensibles
     const safeConfigs = configs.map(config => ({
       id: config._id,
       userId: config.userId,
+      companyId: config.companyId,
       lastUpdated: config.lastUpdated
     }));
 
