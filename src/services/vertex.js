@@ -15,20 +15,51 @@ const clientId = process.env.QAUTH2_CLIENT_ID;
 const clientSecret = process.env.QAUTH2_CLIENT_SECRET;
 const scope = process.env.QAUTH2_SCOPE;
 const redirectUrl = process.env.REDIRECTION_URL;
-const project = process.env.QAUTH2_PROJECT_ID;
+const project = process.env.QAUTH2_PROJECT_ID || 'harx-ai'; // Valeur par défaut
 const location = 'us-central1';
+
+// Vérifier que les variables d'environnement requises sont définies
+const requiredEnvVars = {
+    QAUTH2_CLIENT_ID: clientId,
+    QAUTH2_CLIENT_SECRET: clientSecret,
+    QAUTH2_SCOPE: scope,
+    REDIRECTION_URL: redirectUrl
+};
+
+const missingVars = Object.entries(requiredEnvVars)
+    .filter(([_, value]) => !value)
+    .map(([key]) => key);
+
+if (missingVars.length > 0) {
+    console.warn('Warning: Missing environment variables:', missingVars.join(', '));
+    console.warn('Using default project ID:', project);
+}
 
 // Construct the absolute path to the service account JSON file
 const keyPath = path.join(__dirname, "../config/vertexServiceAccount.json");
 
+// Vérifier si le fichier de service account existe
+const fs = require('fs');
+if (!fs.existsSync(keyPath)) {
+    console.warn('Warning: Service account file not found at:', keyPath);
+    console.warn('Make sure to place your service account JSON file at this location');
+}
+
 // Authenticate to Google cloud using the vertex service account
 const auth = new GoogleAuth({
     keyFilename: keyPath,
-    scopes: [scope],
+    scopes: ['https://www.googleapis.com/auth/cloud-platform']
 });
 
-// Create an instance of VertexAI class
-const vertex_ai = new VertexAI({ project: project, location: location, googleAuthOptions: auth });
+// Create an instance of VertexAI class with explicit project configuration
+const vertex_ai = new VertexAI({ 
+    project: project, 
+    location: location, 
+    googleAuthOptions: {
+        keyFilename: keyPath,
+        scopes: ['https://www.googleapis.com/auth/cloud-platform']
+    }
+});
 
 // Create an instance of GenerativeModel class
 const generativeVisionModel = vertex_ai.getGenerativeModel({

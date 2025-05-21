@@ -1544,51 +1544,29 @@ const archiveEmail = async (req, res) => {
 
 const syncAllLeads = async (req, res) => {
   console.log("=== DÉBUT DE LA SYNCHRONISATION DES LEADS ===");
-  console.log("Informations de la requête:", {
-    userId: req.lead?.userId,
-    gigId: req.lead?.gigId,
-    authToken: req.headers.authorization ? "Présent" : "Absent",
-    cookies: req.cookies,
-    body: req.body,
-    headers: {
-      ...req.headers,
-      authorization: req.headers.authorization ? "Présent" : "Absent"
-    }
-  });
+  
+  // Définir un timeout pour la réponse
+  res.setTimeout(300000); // 5 minutes timeout
 
   // Vérifier et définir les valeurs par défaut
   const userId = req.body?.userId;
   const gigId = req.body?.gigId;
 
-  console.log("Valeurs finales utilisées:", {
-    userId,
-    gigId,
-    source: {
-      fromBody: req.body?.userId,
-      fromBodyGig: req.body?.gigId
-    }
-  });
-
   try {
     checkAuth(req);
     let totalSaved = 0;
     let totalFailed = 0;
-    let failedLeads = []; // Pour stocker les détails des échecs
+    let failedLeads = [];
 
     // Récupérer et sauvegarder les leads page par page
     const result = await executeWithTokenRefresh(req, res, async (token) => {
       let currentPage = 1;
       let hasMoreRecords = true;
       let totalRecords = 0;
-      const pageSize = 250;
-      const delayBetweenRequests = 500;
+      const pageSize = 500; // Augmenté à 500 leads par page
+      const delayBetweenRequests = 1000; // 1 seconde entre les requêtes
 
       console.log("Début de la récupération des leads depuis Zoho");
-      console.log("Configuration:", {
-        pageSize,
-        delayBetweenRequests,
-        baseURL: "https://www.zohoapis.com/crm/v2.1/Deals"
-      });
 
       while (hasMoreRecords) {
         console.log(`\nTraitement de la page ${currentPage}...`);
@@ -1600,29 +1578,25 @@ const syncAllLeads = async (req, res) => {
           per_page: pageSize
         };
 
-        console.log("Paramètres de la requête:", params);
-
         const response = await axios.get(baseURL, {
           params: params,
           headers: {
             Authorization: `Zoho-oauthtoken ${token}`,
             "Content-Type": "application/json",
           },
+          timeout: 30000 // 30 secondes timeout pour chaque requête
         });
 
         if (response.data.data && Array.isArray(response.data.data)) {
           const leadsInPage = response.data.data.length;
           console.log(`Leads récupérés dans cette page: ${leadsInPage}`);
           
-          // Sauvegarder immédiatement les leads de cette page
-          console.log(`\nSauvegarde des ${leadsInPage} leads de la page ${currentPage}...`);
-          
-          const savedLeads = await Promise.all(
-            response.data.data.map(async (lead, index) => {
+          // Traiter les leads par lots de 20 pour éviter la surcharge
+          const batchSize = 20;
+          for (let i = 0; i < leadsInPage; i += batchSize) {
+            const batch = response.data.data.slice(i, i + batchSize);
+            const batchPromises = batch.map(async (lead, index) => {
               try {
-                console.log(`Traitement du lead ${index + 1}/${leadsInPage} de la page ${currentPage}`);
-                
-                // Nettoyer et préparer les données du lead
                 const leadData = {
                   userId: userId,
                   gigId: gigId,
@@ -1637,85 +1611,45 @@ const syncAllLeads = async (req, res) => {
                   refreshToken: req.headers.authorization?.split(" ")[1]
                 };
 
-                // Gérer le cas où l'email est dans Deal_Name
                 if (!lead.Email_1 && lead.Deal_Name && lead.Deal_Name.includes('@')) {
-                  console.log(`Email trouvé dans Deal_Name: ${lead.Deal_Name}`);
                   leadData.Email_1 = lead.Deal_Name;
-                  // Extraire le nom du Deal_Name si possible
                   const nameParts = lead.Deal_Name.split('@')[0];
                   if (nameParts) {
                     leadData.Deal_Name = nameParts.replace(/[._]/g, ' ');
                   }
                 } else {
-                  leadData.Email_1 = lead.Email_1 || 'no-email@placeholder.com'; // Valeur par défaut si Email_1 est null
+                  leadData.Email_1 = lead.Email_1 || 'no-email@placeholder.com';
                 }
 
-                // Vérifier si le lead existe déjà
-                const existingLead = await LeadModel.Lead.findOne({ 
-                  $or: [
-                      { id: leadData.id },
-                    { gigId: leadData.gigId }
-                  ]
-                });
-                if (existingLead) {
-                  console.log(`Lead existe déjà avec id: ${leadData.id} ou gigId: ${leadData.gigId}, ignoré`);
-                      return null;
-                }
+                // Créer un nouveau lead sans vérifier l'existence
+                const newLead = new LeadModel.Lead(leadData);
+                const savedLead = await newLead.save();
+                
+                // Vérification simple après sauvegarde
+                const verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
 
-                // Créer un nouveau lead
-                try {
-                  const newLead = new LeadModel.Lead(leadData);
-                  const savedLead = await newLead.save();
-                  
-                  // Attendre un court instant pour laisser le temps à MongoDB de finaliser l'opération
-                  await new Promise(resolve => setTimeout(resolve, 200));
-                  
-                  // Vérifier que le lead a bien été sauvegardé
-                  const verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
-
-                  if (verifiedLead) {
-                    console.log(`Nouveau lead sauvegardé avec succès. ID Zoho: ${savedLead.id}`);
-                    totalSaved++;
-                    return savedLead;
-                  } else {
-                    console.error(`Nouveau lead non trouvé après sauvegarde`);
-                      totalFailed++;
-                      failedLeads.push({
-                        page: currentPage,
-                        index: index + 1,
-                        leadId: leadData.id,
-                      error: "Lead non trouvé après sauvegarde",
-                        data: leadData,
-                      timestamp: new Date()
-                      });
-                      return null;
-                  }
-                } catch (saveError) {
-                  console.error(`Erreur lors de la sauvegarde du nouveau lead:`, saveError);
+                if (verifiedLead) {
+                  console.log(`Lead sauvegardé avec succès. ID Zoho: ${savedLead.id}`);
+                  totalSaved++;
+                  return savedLead;
+                } else {
                   totalFailed++;
                   failedLeads.push({
                     page: currentPage,
-                    index: index + 1,
+                    index: i + index + 1,
                     leadId: leadData.id,
-                    error: saveError.message,
+                    error: "Lead non trouvé après sauvegarde",
                     data: leadData,
                     timestamp: new Date()
                   });
                   return null;
                 }
               } catch (error) {
-                console.error(`Erreur lors du traitement du lead ${index + 1} de la page ${currentPage}:`, {
-                  error: error.message,
-                  leadData: {
-                    Deal_Name: lead.Deal_Name,
-                    Email_1: lead.Email_1,
-                    id: lead.id
-                  }
-                });
-                
+                console.error(`Erreur lors du traitement du lead:`, error.message);
+                totalFailed++;
                 failedLeads.push({
                   page: currentPage,
-                  index: index + 1,
+                  index: i + index + 1,
                   leadId: lead.id,
                   error: error.message,
                   data: {
@@ -1723,18 +1657,14 @@ const syncAllLeads = async (req, res) => {
                     Email_1: lead.Email_1
                   }
                 });
-                
-                totalFailed++;
                 return null;
               }
-            })
-          );
+            });
 
-          console.log(`\nRésumé de la page ${currentPage}:`, {
-            totalLeads: leadsInPage,
-            saved: savedLeads.filter(lead => lead !== null).length,
-            failed: savedLeads.filter(lead => lead === null).length
-          });
+            // Attendre que le lot soit terminé avant de passer au suivant
+            await Promise.all(batchPromises);
+            await new Promise(resolve => setTimeout(resolve, 500)); // Petit délai entre les lots
+          }
 
           totalRecords = response.data.info.count;
           hasMoreRecords = response.data.info.more_records;
@@ -1743,7 +1673,8 @@ const syncAllLeads = async (req, res) => {
             totalSaved,
             totalFailed,
             totalRecords,
-            hasMoreRecords
+            hasMoreRecords,
+            currentPage
           });
         }
 
@@ -1753,29 +1684,8 @@ const syncAllLeads = async (req, res) => {
         }
 
         currentPage++;
-        console.log(`Attente de ${delayBetweenRequests}ms avant la prochaine requête...`);
         await new Promise(resolve => setTimeout(resolve, delayBetweenRequests));
       }
-
-      console.log("\n=== RÉSUMÉ FINAL DE LA SYNCHRONISATION ===");
-      console.log("Statistiques:", {
-        totalSaved,
-        totalFailed,
-        totalRecords,
-        pagesProcessed: currentPage - 1
-      });
-
-      // Afficher les détails des échecs
-      if (failedLeads.length > 0) {
-        console.log("\nDétails des leads qui ont échoué:", failedLeads);
-      }
-
-      // À la fin de la synchronisation, vérifier le nombre réel de leads dans la base de données
-      const actualLeadCount = await LeadModel.Lead.countDocuments();
-      console.log("\n=== VÉRIFICATION FINALE ===");
-      console.log("Nombre réel de leads dans la base de données:", actualLeadCount);
-      console.log("Nombre déclaré de leads sauvegardés:", totalSaved);
-      console.log("Différence:", totalSaved - actualLeadCount);
 
       return {
         info: {
@@ -1783,7 +1693,6 @@ const syncAllLeads = async (req, res) => {
           total_pages: currentPage - 1,
           total_saved: totalSaved,
           total_failed: totalFailed,
-          actual_lead_count: actualLeadCount,
           failed_leads: failedLeads
         }
       };
