@@ -1651,9 +1651,14 @@ const syncAllLeads = async (req, res) => {
                 }
 
                 // Vérifier si le lead existe déjà
-                const existingLead = await LeadModel.Lead.findOne({ id: leadData.id });
+                const existingLead = await LeadModel.Lead.findOne({ 
+                  $or: [
+                    { id: leadData.id },
+                    { gigId: leadData.gigId }
+                  ]
+                });
                 if (existingLead) {
-                  console.log(`Lead ${leadData.id} existe déjà, ignoré`);
+                  console.log(`Lead existe déjà avec id: ${leadData.id} ou gigId: ${leadData.gigId}, ignoré`);
                   return null;
                 }
 
@@ -1667,7 +1672,7 @@ const syncAllLeads = async (req, res) => {
                   
                   // Vérifier que le lead a bien été sauvegardé
                   const verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
-                  
+
                   if (verifiedLead) {
                     console.log(`Nouveau lead sauvegardé avec succès. ID Zoho: ${savedLead.id}`);
                     totalSaved++;
