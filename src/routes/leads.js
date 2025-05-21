@@ -11,7 +11,8 @@ const {
   generateScript,
   getLeadsByUserId,
   getLeadsByPipelineAndStage,
-  getLeadsByGigId
+  getLeadsByGigId,
+  hasCompanyLeads
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -108,6 +109,7 @@ router.route("/:id/generate-script").post(generateScript);
 router.route("/user/:userId").get(getLeadsByUserId);
 router.route("/filter").get(getLeadsByPipelineAndStage);
 router.route("/gig/:gigId").get(getLeadsByGigId);
+router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
 
 
 

@@ -379,3 +379,42 @@ exports.getLeadsByGigId = async (req, res) => {
     });
   }
 };
+
+// @desc    Check if company has leads
+// @route   GET /api/leads/company/:companyId/has-leads
+// @access  Private
+exports.hasCompanyLeads = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: "Company ID is required"
+      });
+    }
+
+    // Validate if companyId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid company ID format"
+      });
+    }
+
+    // Check if there are any leads for this company
+    const count = await Lead.countDocuments({ companyId });
+
+    res.status(200).json({
+      success: true,
+      hasLeads: count > 0,
+      count: count
+    });
+  } catch (err) {
+    console.error('Error in hasCompanyLeads:', err);
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
