@@ -6,6 +6,11 @@ const leadSchema = new mongoose.Schema({
     ref: 'User',
     required: false
   },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: false
+  },
   assignedTo: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',

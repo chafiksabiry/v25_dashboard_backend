@@ -6,6 +6,11 @@ const zohoConfigSchema = new mongoose.Schema({
     ref: 'User',
     required: true
   },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'Company',
+    required: true
+  },
   refreshToken: {
     type: String,
     required: true
