@@ -1547,7 +1547,6 @@ const syncAllLeads = async (req, res) => {
   console.log("Informations de la requête:", {
     userId: req.lead?.userId,
     gigId: req.lead?.gigId,
-    
     authToken: req.headers.authorization ? "Présent" : "Absent",
     cookies: req.cookies,
     body: req.body,
@@ -1638,21 +1637,6 @@ const syncAllLeads = async (req, res) => {
                   refreshToken: req.headers.authorization?.split(" ")[1]
                 };
 
-                console.log("Données du lead avant traitement:", {
-                  originalLead: {
-                    userId: lead.userId,
-                    gigId: lead.gigId
-                  },
-                  finalLeadData: {
-                    userId: leadData.userId,
-                    gigId: leadData.gigId
-                  },
-                  source: {
-                    fromFunction: { userId, gigId },
-                    fromBody: req.body
-                  }
-                });
-
                 // Gérer le cas où l'email est dans Deal_Name
                 if (!lead.Email_1 && lead.Deal_Name && lead.Deal_Name.includes('@')) {
                   console.log(`Email trouvé dans Deal_Name: ${lead.Deal_Name}`);
@@ -1666,170 +1650,14 @@ const syncAllLeads = async (req, res) => {
                   leadData.Email_1 = lead.Email_1 || 'no-email@placeholder.com'; // Valeur par défaut si Email_1 est null
                 }
 
-                console.log("Données nettoyées du lead:", {
-                  Deal_Name: leadData.Deal_Name,
-                  Stage: leadData.Stage,
-                  Email_1: leadData.Email_1,
-                  Pipeline: leadData.Pipeline,
-                  Phone: leadData.Phone,
-                  Last_Activity_Time: leadData.Last_Activity_Time,
-                  Activity_Tag: leadData.Activity_Tag,
-                  userId: leadData.userId,
-                  gigId: leadData.gigId,
-                  id: leadData.id
-                });
-
-                // Vérifier si un lead avec le même ID Zoho existe déjà
-                if (leadData.id) {
-                  try {
-                    // Première tentative de sauvegarde
-                    let updatedLead = await LeadModel.Lead.findOneAndUpdate(
-                      { id: leadData.id },
-                      {
-                        $set: {
-                          ...leadData,
-                          userId: userId,
-                          gigId: gigId,
-                          updatedAt: new Date()
-                        }
-                      },
-                      { 
-                        new: true,
-                        upsert: true
-                      }
-                    );
-
-                    // Fonction de vérification réutilisable
-                    const verifyLead = async (leadId, maxAttempts = 5) => {
-                      let attempts = 0;
-                      let savedLead = null;
-                      
-                      while (!savedLead && attempts < maxAttempts) {
-                        try {
-                          savedLead = await LeadModel.Lead.findOne({ id: leadId });
-                          if (!savedLead) {
-                            attempts++;
-                            if (attempts < maxAttempts) {
-                              const delay = Math.min(1000, 200 * Math.pow(2, attempts - 1));
-                              console.log(`Tentative ${attempts + 1}/${maxAttempts} pour le lead ${leadId}, attente de ${delay}ms...`);
-                              await new Promise(resolve => setTimeout(resolve, delay));
-                            }
-                          }
-                        } catch (findError) {
-                          console.error(`Erreur lors de la tentative ${attempts + 1} pour le lead ${leadId}:`, findError);
-                          attempts++;
-                          if (attempts < maxAttempts) {
-                            await new Promise(resolve => setTimeout(resolve, 500));
-                          }
-                        }
-                      }
-                      return { savedLead, attempts };
-                    };
-
-                    // Première série de vérifications
-                    let { savedLead, attempts } = await verifyLead(leadData.id);
-
-                    // Si le lead n'est pas trouvé, essayer une deuxième fois avec un délai plus long
-                    if (!savedLead) {
-                      console.log(`Première série de vérifications échouée pour le lead ${leadData.id}, tentative de récupération...`);
-                      await new Promise(resolve => setTimeout(resolve, 2000));
-                      
-                      // Deuxième tentative de sauvegarde
-                      updatedLead = await LeadModel.Lead.findOneAndUpdate(
-                        { id: leadData.id },
-                        {
-                          $set: {
-                            ...leadData,
-                            updatedAt: new Date()
-                          }
-                        },
-                        { 
-                          new: true,
-                          upsert: true
-                        }
-                      );
-
-                      // Deuxième série de vérifications
-                      const secondCheck = await verifyLead(leadData.id, 3);
-                      savedLead = secondCheck.savedLead;
-                      attempts += secondCheck.attempts;
-                    }
-
-                    // Vérification finale
-                    if (!savedLead) {
-                      console.log(`Tentative de vérification finale pour le lead ${leadData.id}...`);
-                      await new Promise(resolve => setTimeout(resolve, 3000));
-                      
-                      // Dernière tentative de sauvegarde
-                      updatedLead = await LeadModel.Lead.findOneAndUpdate(
-                        { id: leadData.id },
-                        {
-                          $set: {
-                            ...leadData,
-                            updatedAt: new Date()
-                          }
-                        },
-                        { 
-                          new: true,
-                          upsert: true
-                        }
-                      );
-
-                      // Vérification finale
-                      savedLead = await LeadModel.Lead.findOne({ id: leadData.id });
-                    }
-
-                    if (savedLead) {
-                      console.log(`Lead ${leadData.id} traité avec succès après ${attempts} tentatives. ID Zoho: ${savedLead.id}`);
-                      totalSaved++;
-                      return savedLead;
-                    } else {
-                      console.error(`Lead ${leadData.id} non trouvé après toutes les tentatives de vérification`);
-                      totalFailed++;
-                      failedLeads.push({
-                        page: currentPage,
-                        index: index + 1,
-                        leadId: leadData.id,
-                        error: `Lead non trouvé après ${attempts} tentatives de vérification`,
-                        data: leadData,
-                        attempts: attempts,
-                        lastAttempt: new Date(),
-                        status: 'failed'
-                      });
-
-                      // Sauvegarde d'urgence dans une collection séparée
-                      try {
-                        const emergencyLead = new LeadModel.Lead({
-                          ...leadData,
-                          status: 'emergency_save',
-                          saveAttempts: attempts,
-                          lastAttempt: new Date()
-                        });
-                        await emergencyLead.save();
-                        console.log(`Lead ${leadData.id} sauvegardé en mode urgence`);
-                      } catch (emergencyError) {
-                        console.error(`Échec de la sauvegarde d'urgence pour le lead ${leadData.id}:`, emergencyError);
-                      }
-
-                      return null;
-                    }
-                  } catch (updateError) {
-                    console.error(`Erreur lors du traitement du lead ${leadData.id}:`, updateError);
-                    totalFailed++;
-                    failedLeads.push({
-                      page: currentPage,
-                      index: index + 1,
-                      leadId: leadData.id,
-                      error: updateError.message,
-                      data: leadData,
-                      timestamp: new Date(),
-                      status: 'error'
-                    });
-                    return null;
-                  }
+                // Vérifier si le lead existe déjà
+                const existingLead = await LeadModel.Lead.findOne({ id: leadData.id });
+                if (existingLead) {
+                  console.log(`Lead ${leadData.id} existe déjà, ignoré`);
+                  return null;
                 }
 
-                // Si on arrive ici, c'est qu'il n'y a pas d'ID Zoho
+                // Créer un nouveau lead
                 try {
                   const newLead = new LeadModel.Lead(leadData);
                   const savedLead = await newLead.save();
@@ -1837,59 +1665,25 @@ const syncAllLeads = async (req, res) => {
                   // Attendre un court instant pour laisser le temps à MongoDB de finaliser l'opération
                   await new Promise(resolve => setTimeout(resolve, 200));
                   
-                  // Vérifier que le lead a bien été sauvegardé avec plusieurs tentatives
-                  let verifiedLead = null;
-                  let attempts = 0;
-                  const maxAttempts = 5; // Augmentation du nombre de tentatives
+                  // Vérifier que le lead a bien été sauvegardé
+                  const verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
                   
-                  while (!verifiedLead && attempts < maxAttempts) {
-                    try {
-                      verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
-                      if (!verifiedLead) {
-                        attempts++;
-                        if (attempts < maxAttempts) {
-                          // Délai exponentiel entre les tentatives
-                          const delay = Math.min(1000, 200 * Math.pow(2, attempts - 1));
-                          console.log(`Tentative ${attempts + 1}/${maxAttempts} pour le nouveau lead, attente de ${delay}ms...`);
-                          await new Promise(resolve => setTimeout(resolve, delay));
-                        }
-                      }
-                    } catch (findError) {
-                      console.error(`Erreur lors de la tentative ${attempts + 1} pour le nouveau lead:`, findError);
-                      attempts++;
-                      if (attempts < maxAttempts) {
-                        await new Promise(resolve => setTimeout(resolve, 500));
-                      }
-                    }
-                  }
-
                   if (verifiedLead) {
                     console.log(`Nouveau lead sauvegardé avec succès. ID Zoho: ${savedLead.id}`);
                     totalSaved++;
                     return savedLead;
                   } else {
-                    // Dernière tentative avec un délai plus long
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    const finalCheck = await LeadModel.Lead.findOne({ _id: savedLead._id });
-                    
-                    if (finalCheck) {
-                      console.log(`Nouveau lead trouvé lors de la vérification finale. ID Zoho: ${finalCheck.id}`);
-                      totalSaved++;
-                      return finalCheck;
-                    } else {
-                      console.error(`Nouveau lead non trouvé après ${maxAttempts} tentatives et vérification finale`);
-                      totalFailed++;
-                      failedLeads.push({
-                        page: currentPage,
-                        index: index + 1,
-                        leadId: leadData.id,
-                        error: `Nouveau lead non trouvé après ${maxAttempts} tentatives et vérification finale`,
-                        data: leadData,
-                        attempts: attempts,
-                        lastAttempt: new Date()
-                      });
-                      return null;
-                    }
+                    console.error(`Nouveau lead non trouvé après sauvegarde`);
+                    totalFailed++;
+                    failedLeads.push({
+                      page: currentPage,
+                      index: index + 1,
+                      leadId: leadData.id,
+                      error: "Lead non trouvé après sauvegarde",
+                      data: leadData,
+                      timestamp: new Date()
+                    });
+                    return null;
                   }
                 } catch (saveError) {
                   console.error(`Erreur lors de la sauvegarde du nouveau lead:`, saveError);
@@ -1904,9 +1698,9 @@ const syncAllLeads = async (req, res) => {
                   });
                   return null;
                 }
-              } catch (saveError) {
-                console.error(`Erreur lors de la sauvegarde du lead ${index + 1} de la page ${currentPage}:`, {
-                  error: saveError.message,
+              } catch (error) {
+                console.error(`Erreur lors du traitement du lead ${index + 1} de la page ${currentPage}:`, {
+                  error: error.message,
                   leadData: {
                     Deal_Name: lead.Deal_Name,
                     Email_1: lead.Email_1,
@@ -1914,12 +1708,11 @@ const syncAllLeads = async (req, res) => {
                   }
                 });
                 
-                // Enregistrer les détails de l'échec
                 failedLeads.push({
                   page: currentPage,
                   index: index + 1,
                   leadId: lead.id,
-                  error: saveError.message,
+                  error: error.message,
                   data: {
                     Deal_Name: lead.Deal_Name,
                     Email_1: lead.Email_1
