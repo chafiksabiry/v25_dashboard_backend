@@ -38,13 +38,14 @@ const app = express();
 // Body parser
 app.use(express.json());
 
-// Enable CORS
-
+// Configuration CORS
 app.use(cors({
-  origin: '*',
+  origin: ['https://v25.harx.ai', 'https://api-dashboard.harx.ai'],
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
 }));
+
 // Mount routers
 app.use('/api/auth', auth);
 app.use('/api/integrations', integrations);
