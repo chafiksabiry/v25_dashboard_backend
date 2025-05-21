@@ -39,10 +39,10 @@ const app = express();
 app.use(express.json());
 
 // Enable CORS
-
 app.use(cors({
-  origin: '*',
+  origin: ['https://v25.harx.ai', 'https://api-dashboard.harx.ai'],
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
 }));
 // Mount routers

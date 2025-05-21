@@ -1653,13 +1653,13 @@ const syncAllLeads = async (req, res) => {
                 // Vérifier si le lead existe déjà
                 const existingLead = await LeadModel.Lead.findOne({ 
                   $or: [
-                    { id: leadData.id },
+                      { id: leadData.id },
                     { gigId: leadData.gigId }
                   ]
                 });
                 if (existingLead) {
                   console.log(`Lead existe déjà avec id: ${leadData.id} ou gigId: ${leadData.gigId}, ignoré`);
-                  return null;
+                      return null;
                 }
 
                 // Créer un nouveau lead
@@ -1679,16 +1679,16 @@ const syncAllLeads = async (req, res) => {
                     return savedLead;
                   } else {
                     console.error(`Nouveau lead non trouvé après sauvegarde`);
-                    totalFailed++;
-                    failedLeads.push({
-                      page: currentPage,
-                      index: index + 1,
-                      leadId: leadData.id,
+                      totalFailed++;
+                      failedLeads.push({
+                        page: currentPage,
+                        index: index + 1,
+                        leadId: leadData.id,
                       error: "Lead non trouvé après sauvegarde",
-                      data: leadData,
+                        data: leadData,
                       timestamp: new Date()
-                    });
-                    return null;
+                      });
+                      return null;
                   }
                 } catch (saveError) {
                   console.error(`Erreur lors de la sauvegarde du nouveau lead:`, saveError);
