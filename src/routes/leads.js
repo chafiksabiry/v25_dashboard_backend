@@ -110,6 +110,7 @@ router.route("/user/:userId").get(getLeadsByUserId);
 router.route("/filter").get(getLeadsByPipelineAndStage);
 router.route("/gig/:gigId").get(getLeadsByGigId);
 router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
+router.route("/gig/:gigId").get(getLeadsByGigId);
 
 
 
