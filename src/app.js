@@ -40,8 +40,8 @@ app.use(express.json());
 
 // Configuration CORS
 app.use(cors({
- origin: '*',
-  credentials: false,
+ origin: ['https://v25.harx.ai', 'https://preprod-dashboard.harx.ai/','http://localhost:5183','https://v25-preprod.harx.ai','https://preprod-dashboard.harx.ai'],
+  credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
 }));
