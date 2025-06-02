@@ -40,7 +40,7 @@ app.use(express.json());
 
 // Configuration CORS
 app.use(cors({
-  origin: ['https://v25.harx.ai', 'https://api-dashboard.harx.ai','http://localhost:5183','https://v25-preprod.harx.ai'],
+ origin: '*',
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
