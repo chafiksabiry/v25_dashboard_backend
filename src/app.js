@@ -41,7 +41,7 @@ app.use(express.json());
 // Configuration CORS
 app.use(cors({
  origin: '*',
-  credentials: true,
+  credentials: false,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
   allowedHeaders: ['Content-Type', 'Authorization', 'x-channel']
 }));
