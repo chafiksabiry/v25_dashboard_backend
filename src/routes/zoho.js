@@ -91,31 +91,33 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-      const { code, userId, state } = req.query;
-      const finalUserId = userId || state;
-      if (!code || !finalUserId) {
-          return res.status(400).json({ error: 'Authorization code and userId are required' });
-      }
+    const { code, state } = req.query;
+    const userId = state;
 
-      const tokenData = await zohoService.getAccessToken(code);
+    if (!code || !userId) {
+      return res.status(400).json({ error: 'Authorization code and userId (state) are required' });
+    }
 
-      // Création de la config à enregistrer
-      const config = new ZohoConfig({
-        userId: finalUserId,
+    const tokenData = await zohoService.getAccessToken(code);
+
+    await ZohoConfig.findOneAndUpdate(
+      { userId },
+      {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
-        
-        updated_at: new Date()
-      });
+        updated_at: new Date(),
+      },
+      { upsert: true }
+    );
 
-      await config.save();
-
-      return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
+    // Suggestion: Use a temporary session ID instead of tokens in URL
+    return res.redirect(`https://v25.harx.ai/app11?session=someGeneratedSessionId`);
   } catch (error) {
-      res.status(500).json({ error: error.message });
+    res.status(500).json({ error: error.message });
   }
 });
+
 
 router.post('/refresh-token', async (req, res) => {
   try {
