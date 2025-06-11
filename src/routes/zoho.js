@@ -89,11 +89,7 @@ router.get('/auth/callback', async (req, res) => {
       }
 
       const tokenData = await zohoService.getAccessToken(code);
-      res.json({ 
-          message: 'Successfully authenticated with Zoho',
-          accessToken: tokenData.access_token,
-          refreshToken: tokenData.refresh_token
-      });
+      return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
   } catch (error) {
       res.status(500).json({ error: error.message });
   }
