@@ -39,8 +39,21 @@ router.post('/disconnect', disconnect);
 
 router.get('/auth', async (req, res) => {
   try {
-      const authUrl = await zohoService.getAuthUrl();
-      res.json({ authUrl });
+      const { clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope } = req.query;
+      
+      // Si des paramètres personnalisés sont fournis, créer une configuration personnalisée
+      const customConfig = (clientId && clientSecret && redirectUri) ? {
+          clientId,
+          clientSecret,
+          redirectUri,
+          authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
+          tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
+          apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
+          scope: scope || 'ZohoCRM.modules.ALL'
+      } : null;
+
+      const generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
+      res.json({ authUrl: generatedAuthUrl });
   } catch (error) {
       res.status(500).json({ error: error.message });
   }
@@ -49,12 +62,23 @@ router.get('/auth', async (req, res) => {
 // Handle OAuth callback
 router.get('/callback', async (req, res) => {
   try {
-      const { code } = req.query;
+      const { code, clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope } = req.query;
       if (!code) {
           return res.status(400).json({ error: 'Authorization code is required' });
       }
 
-      const tokenData = await zohoService.getAccessToken(code);
+      // Si des paramètres personnalisés sont fournis, créer une configuration personnalisée
+      const customConfig = (clientId && clientSecret && redirectUri) ? {
+          clientId,
+          clientSecret,
+          redirectUri,
+          authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
+          tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
+          apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
+          scope: scope || 'ZohoCRM.modules.ALL'
+      } : null;
+
+      const tokenData = await zohoService.getAccessToken(code, customConfig);
       res.json({ 
           message: 'Successfully authenticated with Zoho',
           accessToken: tokenData.access_token,
@@ -68,27 +92,12 @@ router.get('/callback', async (req, res) => {
 router.get('/auth/callback', async (req, res) => {
   try {
       const { code, userId, state } = req.query;
-      
-      // Si nous n'avons pas d'userId, nous redirigeons vers la page de configuration avec le code
-      if (!userId && !state) {
-          return res.redirect(`https://v25.harx.ai/app11?code=${code}`);
-      }
-
       const finalUserId = userId || state;
-      if (!code) {
-          return res.status(400).json({ error: 'Authorization code is required' });
+      if (!code || !finalUserId) {
+          return res.status(400).json({ error: 'Authorization code and userId are required' });
       }
 
       const tokenData = await zohoService.getAccessToken(code);
-
-      // Vérification des champs requis
-      if (!tokenData.access_token || !tokenData.refresh_token || !tokenData.expires_in) {
-          console.error('Token data missing required fields:', tokenData);
-          return res.status(500).json({ 
-              error: 'Invalid token data received from Zoho',
-              details: 'Missing required fields in token response'
-          });
-      }
 
       // Création de la config à enregistrer
       const config = new ZohoConfig({
@@ -96,34 +105,15 @@ router.get('/auth/callback', async (req, res) => {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
+        
         updated_at: new Date()
       });
 
-      try {
-          await config.save();
-          // Retourner les tokens dans la réponse JSON
-          return res.json({
-              success: true,
-              data: {
-                  accessToken: tokenData.access_token,
-                  refreshToken: tokenData.refresh_token,
-                  expiresIn: tokenData.expires_in,
-                  userId: finalUserId
-              }
-          });
-      } catch (saveError) {
-          console.error('Error saving ZohoConfig:', saveError);
-          return res.status(500).json({ 
-              error: 'Failed to save Zoho configuration',
-              details: saveError.message
-          });
-      }
+      await config.save();
+
+      return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
   } catch (error) {
-      console.error('Error in auth callback:', error);
-      res.status(500).json({ 
-          error: 'Error handling OAuth callback',
-          details: error.message
-      });
+      res.status(500).json({ error: error.message });
   }
 });
 

@@ -2,50 +2,59 @@ const axios = require('axios');
 const zohoConfig = require('../config/zoho.config');
 
 class ZohoService {
-    constructor() {
+    constructor(config = null) {
         this.accessToken = null;
+        this.config = config || zohoConfig;
         this.validateConfig();
     }
 
     validateConfig() {
         const requiredFields = ['clientId', 'clientSecret', 'redirectUri', 'authUrl', 'tokenUrl', 'apiBaseUrl'];
-        const missingFields = requiredFields.filter(field => !zohoConfig[field]);
+        const missingFields = requiredFields.filter(field => !this.config[field]);
         
         if (missingFields.length > 0) {
-            console.error('Missing required Zoho configuration:', missingFields);
-            throw new Error(`Missing required Zoho configuration: ${missingFields.join(', ')}`);
+            console.warn('Using default Zoho configuration. For production, please set the following environment variables:', missingFields);
+            console.warn('Current configuration:', {
+                clientId: this.config.clientId,
+                redirectUri: this.config.redirectUri,
+                authUrl: this.config.authUrl,
+                tokenUrl: this.config.tokenUrl,
+                apiBaseUrl: this.config.apiBaseUrl
+            });
         }
     }
 
-    async getAuthUrl() {
+    async getAuthUrl(customConfig = null) {
+        const config = customConfig || this.config;
         const params = new URLSearchParams({
-            client_id: zohoConfig.clientId,
+            client_id: config.clientId,
             response_type: 'code',
-            redirect_uri: zohoConfig.redirectUri,
+            redirect_uri: config.redirectUri,
             access_type: 'offline',
-            scope: zohoConfig.scope || 'ZohoCRM.modules.ALL'
+            scope: config.scope || 'ZohoCRM.modules.ALL'
         });
 
-        return `${zohoConfig.authUrl}?${params.toString()}`;
+        return `${config.authUrl}?${params.toString()}`;
     }
 
-    async getAccessToken(code) {
+    async getAccessToken(code, customConfig = null) {
         try {
+            const config = customConfig || this.config;
             console.log('Getting access token with code:', code);
-            console.log('Token URL:', zohoConfig.tokenUrl);
+            console.log('Token URL:', config.tokenUrl);
             console.log('Request params:', {
                 code,
-                client_id: zohoConfig.clientId,
-                redirect_uri: zohoConfig.redirectUri,
+                client_id: config.clientId,
+                redirect_uri: config.redirectUri,
                 grant_type: 'authorization_code'
             });
 
-            const response = await axios.post(zohoConfig.tokenUrl, null, {
+            const response = await axios.post(config.tokenUrl, null, {
                 params: {
                     code,
-                    client_id: zohoConfig.clientId,
-                    client_secret: zohoConfig.clientSecret,
-                    redirect_uri: zohoConfig.redirectUri,
+                    client_id: config.clientId,
+                    client_secret: config.clientSecret,
+                    redirect_uri: config.redirectUri,
                     grant_type: 'authorization_code'
                 }
             });
@@ -71,11 +80,11 @@ class ZohoService {
 
     async refreshToken(refreshToken) {
         try {
-            const response = await axios.post(zohoConfig.tokenUrl, null, {
+            const response = await axios.post(this.config.tokenUrl, null, {
                 params: {
                     refresh_token: refreshToken,
-                    client_id: zohoConfig.clientId,
-                    client_secret: zohoConfig.clientSecret,
+                    client_id: this.config.clientId,
+                    client_secret: this.config.clientSecret,
                     grant_type: 'refresh_token'
                 }
             });
@@ -96,7 +105,7 @@ class ZohoService {
         try {
             const response = await axios({
                 method,
-                url: `${zohoConfig.apiBaseUrl}${endpoint}`,
+                url: `${this.config.apiBaseUrl}${endpoint}`,
                 headers: {
                     'Authorization': `Zoho-oauthtoken ${this.accessToken}`,
                     'Content-Type': 'application/json'
