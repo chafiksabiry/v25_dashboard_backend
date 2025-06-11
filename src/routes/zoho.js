@@ -141,4 +141,17 @@ router.get('/pipelines', getPipelines);
 router.get('/config/:id', getZohoConfigById);
 router.get('/configs', getAllZohoConfigs);
 
+router.get('/config/user/:userId', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const config = await ZohoConfig.findOne({ userId });
+    if (!config) {
+      return res.status(404).json({ error: 'Configuration not found for this user' });
+    }
+    res.json(config);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
