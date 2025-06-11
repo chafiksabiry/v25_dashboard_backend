@@ -101,6 +101,16 @@ router.get('/auth/callback', async (req, res) => {
 
       try {
           await config.save();
+          // Retourner les tokens dans la réponse JSON
+          return res.json({
+              success: true,
+              data: {
+                  accessToken: tokenData.access_token,
+                  refreshToken: tokenData.refresh_token,
+                  expiresIn: tokenData.expires_in,
+                  userId: finalUserId
+              }
+          });
       } catch (saveError) {
           console.error('Error saving ZohoConfig:', saveError);
           return res.status(500).json({ 
@@ -108,8 +118,6 @@ router.get('/auth/callback', async (req, res) => {
               details: saveError.message
           });
       }
-
-      return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
   } catch (error) {
       console.error('Error in auth callback:', error);
       res.status(500).json({ 
