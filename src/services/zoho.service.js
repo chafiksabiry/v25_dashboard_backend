@@ -9,7 +9,7 @@ class ZohoService {
     }
 
     validateConfig() {
-        const requiredFields = ['clientId', 'clientSecret', 'redirectUri', 'authUrl', 'tokenUrl', 'apiBaseUrl'];
+        const requiredFields = ['clientId', 'clientSecret', 'redirectUri', 'authUrl', 'tokenUrl', 'apiBaseUrl',];
         const missingFields = requiredFields.filter(field => !this.config[field]);
         
         if (missingFields.length > 0) {
@@ -31,7 +31,8 @@ class ZohoService {
             response_type: 'code',
             redirect_uri: config.redirectUri,
             access_type: 'offline',
-            scope: config.scope || 'ZohoCRM.modules.ALL'
+            scope: config.scope || 'ZohoCRM.modules.ALL',
+            state: config.state || ''
         });
 
         return `${config.authUrl}?${params.toString()}`;
