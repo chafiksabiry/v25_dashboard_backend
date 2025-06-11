@@ -92,16 +92,16 @@ router.get('/callback', async (req, res) => {
 router.get('/auth/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
-    const userId = state;
-
-    if (!code || !userId) {
+    
+    // If state is empty or not provided, return error
+    if (!code || !state) {
       return res.status(400).json({ error: 'Authorization code and userId (state) are required' });
     }
 
     const tokenData = await zohoService.getAccessToken(code);
 
     await ZohoConfig.findOneAndUpdate(
-      { userId },
+      { userId: state },
       {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
@@ -111,7 +111,7 @@ router.get('/auth/callback', async (req, res) => {
       { upsert: true }
     );
 
-    // Suggestion: Use a temporary session ID instead of tokens in URL
+    // Redirect to the frontend with the session
     return res.redirect(`https://v25.harx.ai/app11?session=someGeneratedSessionId`);
   } catch (error) {
     res.status(500).json({ error: error.message });
