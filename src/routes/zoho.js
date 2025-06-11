@@ -67,8 +67,9 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-      const { code, userId } = req.query;
-      if (!code || !userId) {
+      const { code, userId, state } = req.query;
+      const finalUserId = userId || state;
+      if (!code || !finalUserId) {
           return res.status(400).json({ error: 'Authorization code and userId are required' });
       }
 
@@ -76,7 +77,7 @@ router.get('/auth/callback', async (req, res) => {
 
       // Création de la config à enregistrer
       const config = new ZohoConfig({
-        userId,
+        userId: finalUserId,
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
