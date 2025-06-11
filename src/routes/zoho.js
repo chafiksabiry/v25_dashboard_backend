@@ -91,25 +91,28 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-    const { code, state } = req.query;
+    const { code, state, userId } = req.query;
     
     // Check if code is present
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Check if state is present and not empty
-    if (!state || state.trim() === '') {
+    // Use either state or userId, with state taking precedence
+    const finalUserId = state || userId;
+
+    // Check if we have a valid userId
+    if (!finalUserId || finalUserId.trim() === '') {
       return res.status(400).json({ 
-        error: 'User ID (state) is required and cannot be empty',
-        details: 'The state parameter must contain a valid user ID'
+        error: 'User ID is required and cannot be empty',
+        details: 'The state parameter or userId must contain a valid user ID'
       });
     }
 
     const tokenData = await zohoService.getAccessToken(code);
 
     await ZohoConfig.findOneAndUpdate(
-      { userId: state },
+      { userId: finalUserId },
       {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
