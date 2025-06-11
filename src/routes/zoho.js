@@ -28,25 +28,9 @@ const {
   getAllZohoConfigs
 } = require("../controllers/zoho");
 const zohoService = require('../services/zoho.service');
+const ZohoConfig = require('../models/ZohoConfig');
 
 const router = express.Router();
-
-const zohoSchema = new mongoose.Schema({
-  clientId: {
-    type: String,
-    required: true
-  },
-  clientSecret: {
-    type: String,
-    required: true
-  },
-  refreshToken: {
-    type: String,
-    required: true
-  }
-}, { timestamps: true });
-
-const ZohoIntegration = mongoose.model('ZohoIntegration', zohoSchema);
 
 // Configuration et authentification
 router.post('/configure', configureZohoCRM);
@@ -83,12 +67,24 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-      const { code } = req.query;
-      if (!code) {
-          return res.status(400).json({ error: 'Authorization code is required' });
+      const { code, userId } = req.query;
+      if (!code || !userId) {
+          return res.status(400).json({ error: 'Authorization code and userId are required' });
       }
 
       const tokenData = await zohoService.getAccessToken(code);
+
+      // Création de la config à enregistrer
+      const config = new ZohoConfig({
+        userId,
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        expires_in: tokenData.expires_in,
+        updated_at: new Date()
+      });
+
+      await config.save();
+
       return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
   } catch (error) {
       res.status(500).json({ error: error.message });
