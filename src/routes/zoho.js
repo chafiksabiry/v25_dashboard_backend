@@ -81,6 +81,15 @@ router.get('/auth/callback', async (req, res) => {
 
       const tokenData = await zohoService.getAccessToken(code);
 
+      // Vérification des champs requis
+      if (!tokenData.access_token || !tokenData.refresh_token || !tokenData.expires_in) {
+          console.error('Token data missing required fields:', tokenData);
+          return res.status(500).json({ 
+              error: 'Invalid token data received from Zoho',
+              details: 'Missing required fields in token response'
+          });
+      }
+
       // Création de la config à enregistrer
       const config = new ZohoConfig({
         userId: finalUserId,
@@ -90,12 +99,23 @@ router.get('/auth/callback', async (req, res) => {
         updated_at: new Date()
       });
 
-      await config.save();
+      try {
+          await config.save();
+      } catch (saveError) {
+          console.error('Error saving ZohoConfig:', saveError);
+          return res.status(500).json({ 
+              error: 'Failed to save Zoho configuration',
+              details: saveError.message
+          });
+      }
 
       return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
   } catch (error) {
       console.error('Error in auth callback:', error);
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ 
+          error: 'Error handling OAuth callback',
+          details: error.message
+      });
   }
 });
 
