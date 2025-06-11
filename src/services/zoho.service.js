@@ -4,6 +4,17 @@ const zohoConfig = require('../config/zoho.config');
 class ZohoService {
     constructor() {
         this.accessToken = null;
+        this.validateConfig();
+    }
+
+    validateConfig() {
+        const requiredFields = ['clientId', 'clientSecret', 'redirectUri', 'authUrl', 'tokenUrl', 'apiBaseUrl'];
+        const missingFields = requiredFields.filter(field => !zohoConfig[field]);
+        
+        if (missingFields.length > 0) {
+            console.error('Missing required Zoho configuration:', missingFields);
+            throw new Error(`Missing required Zoho configuration: ${missingFields.join(', ')}`);
+        }
     }
 
     async getAuthUrl() {
@@ -12,7 +23,7 @@ class ZohoService {
             response_type: 'code',
             redirect_uri: zohoConfig.redirectUri,
             access_type: 'offline',
-            scope: 'ZohoCRM.modules.ALL'
+            scope: zohoConfig.scope || 'ZohoCRM.modules.ALL'
         });
 
         return `${zohoConfig.authUrl}?${params.toString()}`;
@@ -20,6 +31,15 @@ class ZohoService {
 
     async getAccessToken(code) {
         try {
+            console.log('Getting access token with code:', code);
+            console.log('Token URL:', zohoConfig.tokenUrl);
+            console.log('Request params:', {
+                code,
+                client_id: zohoConfig.clientId,
+                redirect_uri: zohoConfig.redirectUri,
+                grant_type: 'authorization_code'
+            });
+
             const response = await axios.post(zohoConfig.tokenUrl, null, {
                 params: {
                     code,
@@ -30,10 +50,21 @@ class ZohoService {
                 }
             });
 
+            console.log('Token response:', response.data);
+
+            if (!response.data.access_token || !response.data.refresh_token || !response.data.expires_in) {
+                console.error('Invalid token response:', response.data);
+                throw new Error('Invalid token response from Zoho');
+            }
+
             this.accessToken = response.data.access_token;
             return response.data;
         } catch (error) {
-            console.error('Error getting access token:', error);
+            console.error('Error getting access token:', {
+                message: error.message,
+                response: error.response?.data,
+                status: error.response?.status
+            });
             throw error;
         }
     }
