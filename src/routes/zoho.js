@@ -27,6 +27,7 @@ const {
   getZohoConfigById,
   getAllZohoConfigs
 } = require("../controllers/zoho");
+const zohoService = require('../services/zoho.service');
 
 const router = express.Router();
 
@@ -51,6 +52,51 @@ const ZohoIntegration = mongoose.model('ZohoIntegration', zohoSchema);
 router.post('/configure', configureZohoCRM);
 router.post('/token', getTokenWithCredentials);
 router.post('/disconnect', disconnect);
+
+router.get('/auth', async (req, res) => {
+  try {
+      const authUrl = await zohoService.getAuthUrl();
+      res.json({ authUrl });
+  } catch (error) {
+      res.status(500).json({ error: error.message });
+  }
+});
+
+// Handle OAuth callback
+router.get('/callback', async (req, res) => {
+  try {
+      const { code } = req.query;
+      if (!code) {
+          return res.status(400).json({ error: 'Authorization code is required' });
+      }
+
+      const tokenData = await zohoService.getAccessToken(code);
+      res.json({ 
+          message: 'Successfully authenticated with Zoho',
+          accessToken: tokenData.access_token,
+          refreshToken: tokenData.refresh_token
+      });
+  } catch (error) {
+      res.status(500).json({ error: error.message });
+  }
+});
+
+router.post('/refresh-token', async (req, res) => {
+  try {
+      const { refreshToken } = req.body;
+      if (!refreshToken) {
+          return res.status(400).json({ error: 'Refresh token is required' });
+      }
+
+      const tokenData = await zohoService.refreshToken(refreshToken);
+      res.json({ 
+          message: 'Token refreshed successfully',
+          accessToken: tokenData.access_token
+      });
+  } catch (error) {
+      res.status(500).json({ error: error.message });
+  }
+});
 
 // Leads et Deals
 router.get('/leads', getLeads);
