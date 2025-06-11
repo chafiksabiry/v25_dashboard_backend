@@ -93,9 +93,17 @@ router.get('/auth/callback', async (req, res) => {
   try {
     const { code, state } = req.query;
     
-    // If state is empty or not provided, return error
-    if (!code || !state) {
-      return res.status(400).json({ error: 'Authorization code and userId (state) are required' });
+    // Check if code is present
+    if (!code) {
+      return res.status(400).json({ error: 'Authorization code is required' });
+    }
+
+    // Check if state is present and not empty
+    if (!state || state.trim() === '') {
+      return res.status(400).json({ 
+        error: 'User ID (state) is required and cannot be empty',
+        details: 'The state parameter must contain a valid user ID'
+      });
     }
 
     const tokenData = await zohoService.getAccessToken(code);
