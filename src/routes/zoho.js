@@ -68,9 +68,15 @@ router.get('/callback', async (req, res) => {
 router.get('/auth/callback', async (req, res) => {
   try {
       const { code, userId, state } = req.query;
+      
+      // Si nous n'avons pas d'userId, nous redirigeons vers la page de configuration avec le code
+      if (!userId && !state) {
+          return res.redirect(`https://v25.harx.ai/app11/configure-zoho?code=${code}`);
+      }
+
       const finalUserId = userId || state;
-      if (!code || !finalUserId) {
-          return res.status(400).json({ error: 'Authorization code and userId are required' });
+      if (!code) {
+          return res.status(400).json({ error: 'Authorization code is required' });
       }
 
       const tokenData = await zohoService.getAccessToken(code);
@@ -88,6 +94,7 @@ router.get('/auth/callback', async (req, res) => {
 
       return res.redirect(`https://v25.harx.ai/app11?accessToken=${tokenData.access_token}&refreshToken=${tokenData.refresh_token}`);
   } catch (error) {
+      console.error('Error in auth callback:', error);
       res.status(500).json({ error: error.message });
   }
 });
