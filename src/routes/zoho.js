@@ -49,7 +49,8 @@ router.get('/auth', async (req, res) => {
           authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
           tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
           apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
-          scope: scope || 'ZohoCRM.modules.ALL'
+          scope: scope || 'ZohoCRM.modules.ALL',
+          state: userId
       } : null;
 
       const generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
