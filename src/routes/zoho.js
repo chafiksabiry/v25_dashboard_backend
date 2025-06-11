@@ -71,7 +71,7 @@ router.get('/auth/callback', async (req, res) => {
       
       // Si nous n'avons pas d'userId, nous redirigeons vers la page de configuration avec le code
       if (!userId && !state) {
-          return res.redirect(`https://v25.harx.ai/app11/configure-zoho?code=${code}`);
+          return res.redirect(`https://v25.harx.ai/app11?code=${code}`);
       }
 
       const finalUserId = userId || state;
