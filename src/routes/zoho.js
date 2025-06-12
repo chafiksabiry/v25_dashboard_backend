@@ -192,4 +192,41 @@ router.get('/config/user/:userId', async (req, res) => {
   }
 });
 
+router.post('/config/user/:userId/refresh-token', async (req, res) => {
+  try {
+    const { userId } = req.params;
+    const config = await ZohoConfig.findOne({ userId });
+    
+    if (!config) {
+      return res.status(404).json({ error: 'Configuration not found for this user' });
+    }
+
+    if (!config.refresh_token) {
+      return res.status(400).json({ error: 'No refresh token found for this user' });
+    }
+
+    const tokenData = await zohoService.refreshToken(config.refresh_token);
+
+    // Update the configuration with new tokens
+    await ZohoConfig.findOneAndUpdate(
+      { userId },
+      {
+        access_token: tokenData.access_token,
+        refresh_token: tokenData.refresh_token,
+        expires_in: tokenData.expires_in,
+        updated_at: new Date(),
+      }
+    );
+
+    res.json({
+      message: 'Token refreshed successfully',
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
 module.exports = router;
