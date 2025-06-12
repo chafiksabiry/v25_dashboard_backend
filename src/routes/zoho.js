@@ -122,7 +122,6 @@ router.get('/auth/callback', async (req, res) => {
       { upsert: true }
     );
 
-    // Redirect to the frontend with the session
     return res.redirect(`https://v25-preprod.harx.ai/app11?session=someGeneratedSessionId`);
   } catch (error) {
     res.status(500).json({ error: error.message });
