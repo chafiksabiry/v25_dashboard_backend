@@ -428,12 +428,10 @@ const getLeads = async (req, res) => {
       let totalRecords = 0;
 
       while (hasMoreRecords) {
-        // console.log(`Récupération de la page ${currentPage}...`);
-
         // Construire la requête de base
-        const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
+        const baseURL = "https://www.zohoapis.com/crm/v2.1/Leads"; // Changé de Deals à Leads
         let params = {
-          fields: "Deal_Name,Stage,Pipeline,Amount,Closing_Date,Account_Name,Description,Email_1,Phone,Owner,Created_Time,Modified_Time,Last_Activity_Time,Next_Step,Probability,Lead_Source,Type,Expected_Revenue,Overall_Sales_Duration,Stage_Duration",
+          fields: "Full_Name,Company,Email_1,Phone,Status,Lead_Source,Created_Time,Modified_Time,Last_Activity_Time,Description,Lead_Status,Rating,Website,Industry,Annual_Revenue,Number_of_Employees",
           page: currentPage,
           per_page: pageSize
         };
@@ -443,8 +441,6 @@ const getLeads = async (req, res) => {
           params.criteria = `(Modified_Time:greater_than:${modifiedSince})`;
         }
 
-        // console.log("Paramètres de requête:", params);
-
         const response = await axios.get(baseURL, {
           params: params,
           headers: {
@@ -453,15 +449,29 @@ const getLeads = async (req, res) => {
           },
         });
 
-        // Ajouter les leads de la page courante au tableau
-        if (response.data.data && Array.isArray(response.data.data)) {
-          allLeads = allLeads.concat(response.data.data);
-          totalRecords = response.data.info.count;
-          hasMoreRecords = response.data.info.more_records;
-          
-          // console.log(`Page ${currentPage} récupérée: ${response.data.data.length} leads`);
-          // console.log(`Total des leads récupérés jusqu'à présent: ${allLeads.length}`);
+        // Vérification de la structure de la réponse
+        if (!response.data || !response.data.data) {
+          console.error("Réponse invalide de l'API Zoho:", response.data);
+          throw new Error("Format de réponse invalide de l'API Zoho");
         }
+
+        // Vérification que data est un tableau
+        if (!Array.isArray(response.data.data)) {
+          console.error("Les données reçues ne sont pas un tableau:", response.data.data);
+          throw new Error("Format de données invalide");
+        }
+
+        // Ajouter les leads de la page courante au tableau
+        allLeads = allLeads.concat(response.data.data);
+        
+        // Vérification de la présence des informations de pagination
+        if (!response.data.info) {
+          console.error("Informations de pagination manquantes:", response.data);
+          throw new Error("Informations de pagination manquantes");
+        }
+
+        totalRecords = response.data.info.count || 0;
+        hasMoreRecords = response.data.info.more_records || false;
 
         // Si on a plus de pages, on arrête
         if (!hasMoreRecords) {
@@ -474,7 +484,6 @@ const getLeads = async (req, res) => {
 
         // Ajouter un délai entre les requêtes pour éviter le rate limit
         if (hasMoreRecords) {
-          // console.log(`Attente de ${delayBetweenRequests}ms avant la prochaine requête...`);
           await delay(delayBetweenRequests);
         }
       }
@@ -493,7 +502,6 @@ const getLeads = async (req, res) => {
       };
     });
 
-    // console.log(`Récupération terminée. Total des leads: ${result.data.length}`);
     res.json({ success: true, data: result });
   } catch (error) {
     console.error("Erreur complète getLeads:", error.message);
@@ -521,7 +529,7 @@ const getLeads = async (req, res) => {
 
     res.status(error.response?.status || 500).json({
       success: false,
-      message: "Erreur lors de la récupération des deals",
+      message: "Erreur lors de la récupération des leads",
       error: error.message,
       details: error.response?.data,
     });

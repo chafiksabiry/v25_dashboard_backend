@@ -1,32 +1,13 @@
 const mongoose = require('mongoose');
 
 const zohoConfigSchema = new mongoose.Schema({
-  userId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'User',
-    required: true
-  },
-  companyId: {
-    type: mongoose.Schema.Types.ObjectId,
-    ref: 'Company',
-    required: true
-  },
-  refreshToken: {
-    type: String,
-    required: true
-  },
-  clientId: {
-    type: String,
-    required: true
-  },
-  clientSecret: {
-    type: String,
-    required: true
-  },
-  lastUpdated: {
-    type: Date,
-    default: Date.now
-  }
+  userId: { type: String, required: true },
+  access_token: { type: String, required: true },
+  refresh_token: { type: String, required: true },
+  expires_in: { type: Number, required: true },
+  updated_at: { type: Date, required: true }
 });
 
-module.exports = mongoose.model('ZohoConfig', zohoConfigSchema); 
+const ZohoConfig = mongoose.model('ZohoConfig', zohoConfigSchema);
+
+module.exports = ZohoConfig; 
