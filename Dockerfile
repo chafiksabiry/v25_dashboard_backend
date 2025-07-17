@@ -8,12 +8,12 @@ RUN npm install
 
 COPY . .
 
-ENV MONGODB_URI=mongodb://harx:gcZ62rl8hoME@38.242.208.242:27018/V25_CompanySearchWizard
+ENV MONGODB_URI=mongodb://harx:ix5S3vU6BjKn4MHp@207.180.226.2:27017/V25_HarxPreProd
 ENV PORT=5005
 ENV ZOHO_CLIENT_ID=1000.X75RG8I45FAICU5PTVZJ3U40P8T96L
 ENV ZOHO_CLIENT_SECRET=238fb18e77f12d4974aeb2c7d4fb31a8897a492e94
 ENV ZOHO_ACCESS_TOKEN=1000.d2010ed8618379630bd0f3c10ddc95c5.b134a445802d4b823fe633183f333877
-ENV ZOHO_REDIRECT_URI=https://api-dashboard.harx.ai/api/zoho/auth/callback
+ENV ZOHO_REDIRECT_URI=https://preprod-api-dashboard.harx.ai/api/zoho/auth/callback
 ENV ZOHO_SCOPE=SalesIQ.chattranscript.READ,SalesIQ.chatdetails.READ,SalesIQ.conversations.READ,SalesIQ.portals.READ,ZohoCRM.modules.ALL,ZohoCRM.modules.emails.ALL
 ENV ZOHO_AUTH_URL=https://accounts.zoho.com/oauth/v2/auth
 ENV ZOHO_TOKEN_URL=https://accounts.zoho.com/oauth/v2/token
