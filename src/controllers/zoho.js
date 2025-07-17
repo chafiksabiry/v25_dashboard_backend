@@ -1306,13 +1306,25 @@ const configureZohoCRM = async (req, res) => {
 const disconnect = async (req, res) => {
   console.log("Début de disconnect");
   try {
-    // Vérifier si l'utilisateur est authentifié
-    if (!req.user || !req.user.id) {
+    // Extract userId from the gigId:userId format in Authorization header
+    const authHeader = req.headers.authorization;
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
       return res.status(401).json({
         success: false,
-        message: "Utilisateur non authentifié",
+        message: "Token d'autorisation requis",
       });
     }
+
+    const token = authHeader.split(' ')[1];
+    const [gigId, userId] = token.split(':');  
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: "Format d'autorisation invalide. Format attendu: gigId:userId",
+      });
+    }
+
+    console.log("UserId extrait:", userId);
 
     // Révoquer le token d'accès actuel si présent
     const accessToken = req.headers.authorization?.split(" ")[1];
@@ -1336,7 +1348,7 @@ const disconnect = async (req, res) => {
     }
 
     // Supprimer la configuration de l'utilisateur de la base de données
-    await ZohoConfig.deleteMany({ userId: req.user.id });
+    await ZohoConfig.deleteMany({ userId: userId });
 
     res.json({
       success: true,
