@@ -1,6 +1,6 @@
 const axios = require('axios');
-const ZohoConfig = require('../models/ZohoConfig);
-const { config } = require('../config/env);
+const ZohoConfig = require('../models/ZohoConfig');
+const { config } = require('../config/env');
 /**
  * Middleware pour gérer automatiquement le refresh des tokens Zoho
  * Vérifie si le token est expiré et le rafraîchit automatiquement
