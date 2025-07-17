@@ -29,6 +29,7 @@ const {
 } = require("../controllers/zoho");
 const zohoService = require('../services/zoho.service');
 const ZohoConfig = require('../models/ZohoConfig');
+const { zohoTokenMiddleware, requireZohoConfig } = require('../middleware/zohoTokenMiddleware');
 
 const router = express.Router();
 
@@ -147,34 +148,33 @@ router.post('/refresh-token', async (req, res) => {
   }
 });
 
-// Leads et Deals
-router.get('/leads', getLeads);
-router.post('/leads', saveLeads);
-router.put('/leads/:id', updateLead);
-router.post('/leads/sync-all', syncAllLeads);
-router.get('/deals', getDeals);
-router.get('/deals/count', getDealsCount);
-router.get('/leads-by-pipeline', getLeadsByPipeline);
+// Leads et Deals - avec middleware de refresh automatique
+router.get('/leads', zohoTokenMiddleware, requireZohoConfig, getLeads);
+router.post('/leads', zohoTokenMiddleware, requireZohoConfig, saveLeads);
+router.put('/leads/:id', zohoTokenMiddleware, requireZohoConfig, updateLead);
+router.post('/leads/sync-all', zohoTokenMiddleware, requireZohoConfig, syncAllLeads);
+router.get('/deals', zohoTokenMiddleware, requireZohoConfig, getDeals);
+router.get('/deals/count', zohoTokenMiddleware, requireZohoConfig, getDealsCount);
+router.get('/leads-by-pipeline', zohoTokenMiddleware, requireZohoConfig, getLeadsByPipeline);
 
-// Contacts
-router.get('/contacts', getContacts);
+// Contacts - avec middleware de refresh automatique
+router.get('/contacts', zohoTokenMiddleware, requireZohoConfig, getContacts);
 
-// Chats
-router.get('/chats', getChats);
-router.get('/chats/:id/messages', getCoversationMessages);
-router.post('/chats/:id/messages', sendMessageToConversation);
+// Chats - avec middleware de refresh automatique
+router.get('/chats', zohoTokenMiddleware, requireZohoConfig, getChats);
+router.get('/chats/:id/messages', zohoTokenMiddleware, requireZohoConfig, getCoversationMessages);
+router.post('/chats/:id/messages', zohoTokenMiddleware, requireZohoConfig, sendMessageToConversation);
 
+// Emails - avec middleware de refresh automatique
+router.get('/folders', zohoTokenMiddleware, requireZohoConfig, getFolders);
+router.get('/emails/sent', zohoTokenMiddleware, requireZohoConfig, getSentEmails);
+router.get('/emails/inbox', zohoTokenMiddleware, requireZohoConfig, getInboxEmails);
+router.get('/emails/archived', zohoTokenMiddleware, requireZohoConfig, getArchivedEmails);
+router.post('/emails/:id/archive', zohoTokenMiddleware, requireZohoConfig, archiveEmail);
 
-// Emails
-router.get('/folders', getFolders);
-router.get('/emails/sent', getSentEmails);
-router.get('/emails/inbox', getInboxEmails);
-router.get('/emails/archived', getArchivedEmails);
-router.post('/emails/:id/archive', archiveEmail);
-
-router.get('/check-configuration', checkConfiguration);
-
-router.get('/pipelines', getPipelines);
+// Configuration et pipelines - avec middleware de refresh automatique
+router.get('/check-configuration', zohoTokenMiddleware, requireZohoConfig, checkConfiguration);
+router.get('/pipelines', zohoTokenMiddleware, requireZohoConfig, getPipelines);
 
 router.get('/config/:id', getZohoConfigById);
 router.get('/configs', getAllZohoConfigs);
