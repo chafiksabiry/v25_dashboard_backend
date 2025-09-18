@@ -182,31 +182,31 @@ Data to process (${dataRowCount} rows expected):
 ${truncatedContent}`;
 
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
+    console.log(`🚀 Making OpenAI API call for ${dataRowCount} rows...`);
+    
+    // Utiliser axios au lieu de fetch
+    const axios = require('axios');
+    
+    const response = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-3.5-turbo',
+      messages: [
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      max_tokens: 4000,
+      temperature: 0.1,
+    }, {
       headers: {
         'Authorization': `Bearer ${openaiApiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify({
-        model: 'gpt-3.5-turbo',
-        messages: [
-          {
-            role: 'user',
-            content: prompt
-          }
-        ],
-        max_tokens: 4000,
-        temperature: 0.1,
-      }),
+      timeout: 60000 // 60 secondes
     });
 
-    if (!response.ok) {
-      const errorData = await response.json();
-      throw new Error(`OpenAI API error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
-    }
-
-    const data = await response.json();
+    console.log(`✅ OpenAI API call successful, processing response...`);
+    const data = response.data;
     const content = data.choices[0].message.content;
 
     // Parse JSON response
@@ -279,7 +279,18 @@ ${truncatedContent}`;
 
   } catch (error) {
     console.error('❌ Error in processPageDirectlyWithOpenAI:', error);
-    throw error;
+    
+    // Gestion spécifique des erreurs axios
+    if (error.response) {
+      console.error(`❌ OpenAI API error: ${error.response.status} - ${error.response.data?.error?.message || 'Unknown error'}`);
+      throw new Error(`OpenAI API error: ${error.response.status} - ${error.response.data?.error?.message || 'Unknown error'}`);
+    } else if (error.request) {
+      console.error('❌ No response from OpenAI API');
+      throw new Error('No response from OpenAI API');
+    } else {
+      console.error(`❌ Request setup error: ${error.message}`);
+      throw error;
+    }
   }
 }
 
@@ -835,10 +846,12 @@ router.post('/process-paginated', upload.single('file'), async (req, res) => {
     
     console.log(`📊 Page ${page}/${totalPages}: Processing ${pageLines.length} rows (${startIndex + 1}-${endIndex})`);
     
+    console.log(`🔄 About to process page ${page} with ${pageLines.length} lines using processPageDirectlyWithOpenAI...`);
+    
     // Traiter cette page directement avec OpenAI (sans chunking interne)
     const result = await processPageDirectlyWithOpenAI(pageContent, fileType, pageLines.length);
     
-    console.log(`✅ Page ${page} processed: ${result.leads.length} leads extracted`);
+    console.log(`✅ Page ${page} processed successfully: ${result.leads.length} leads extracted`);
     
     res.json({
       success: true,
