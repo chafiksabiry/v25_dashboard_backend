@@ -1,23 +1,24 @@
-# 🔄 Guide - Pagination avec Affichage en Temps Réel
+# 🔄 Guide - Pagination avec Appels API Multiples
 
 ## 🎯 Nouveau Comportement
 
-Le système traite maintenant les gros fichiers **page par page** et affiche les leads **au fur et à mesure** qu'ils sont traités !
+Le système fait maintenant **des appels API séparés** pour chaque page et affiche les leads **au fur et à mesure** !
 
 ## ✨ Fonctionnalités
 
-### 🔥 **Affichage en Temps Réel**
-- Les leads apparaissent **immédiatement** dans la liste
-- Le compteur se met à jour en direct : `"X leads ready to save 🔄"`
-- Progression page par page : `"Page 3/10 traitée - 50 leads ajoutés (Total: 150)"`
+### 🔥 **Appels API Multiples**
+- **1 fichier de 100 lignes = 2 appels API séparés** (50 lignes par appel)
+- **1 fichier de 1000 lignes = 20 appels API séparés**
+- Chaque appel traite exactement 50 lignes
+- Les leads apparaissent **immédiatement** après chaque appel
 
-### 📊 **Traitement Séquentiel**
+### 📊 **Traitement par Appels Séparés**
 ```
-Page 1: 50 leads → Affichage immédiat
-Page 2: 50 leads → +50 leads dans la liste  
-Page 3: 50 leads → +50 leads dans la liste
+API Call 1: Page 1 (lignes 1-50) → 50 leads affichés
+API Call 2: Page 2 (lignes 51-100) → +50 leads ajoutés  
+API Call 3: Page 3 (lignes 101-150) → +50 leads ajoutés
 ...
-Page N: X leads → Total final affiché
+API Call N: Page N → Total final affiché
 ```
 
 ### ⚡ **Performance**
@@ -39,42 +40,46 @@ Page N: X leads → Total final affiché
 
 ### 3. **Console Logs**
 ```
-🔄 Starting paginated processing with real-time display...
-📊 File analysis: 1000 total rows, 20 pages
-✅ Page 1/20: +50 leads (Total: 50)
-✅ Page 2/20: +50 leads (Total: 100)
+🔄 Starting multiple API calls for paginated processing...
+📡 API Call 1: Getting file info...
+📊 File info discovered: 1000 total rows, 20 pages
+🔢 Will make 20 separate API calls...
+✅ API Call 1/20: +50 leads (Total: 50)
+📡 API Call 2: Processing page 2/20...
+✅ API Call 2/20: +50 leads (Total: 100)
 ...
-✅ Page 20/20: +50 leads (Total: 1000)
+✅ API Call 20/20: +50 leads (Total: 1000)
+🎉 Processing completed: 20 API calls made, 1000 total leads
 ```
 
 ## 🎮 Test avec Différentes Tailles
 
 ### **Petit Fichier** (< 50 lignes)
-- 1 page seulement
+- **1 seul appel API**
 - Traitement rapide
 - Affichage immédiat
 
 ### **Fichier Moyen** (100-500 lignes)  
-- 2-10 pages
-- Leads apparaissent par groupes de 50
-- Progression visible
+- **2-10 appels API séparés**
+- Leads apparaissent par groupes de 50 après chaque appel
+- Progression visible avec logs détaillés
 
 ### **Gros Fichier** (1000+ lignes)
-- 20+ pages  
+- **20+ appels API séparés**
 - Affichage continu pendant 5-10 minutes
-- Aucun timeout !
+- Aucun timeout car chaque appel < 2 minutes !
 
 ## 🔧 Configuration
 
 ### **Paramètres par Défaut**
-- `pageSize: 50` (lignes par page)
-- `pause: 200ms` (entre pages)
-- `timeout: 2min` (par page)
+- `pageSize: 50` (lignes par appel API)
+- `pause: 300ms` (entre appels API)
+- `timeout: 2min` (par appel API)
 
 ### **Gestion d'Erreurs**
-- **Page échoue** : Continue avec la suivante
+- **Appel API échoue** : Continue avec l'appel suivant
 - **Annulation** : Arrêt immédiat, leads déjà traités conservés
-- **Timeout page** : Skip et continue
+- **Timeout appel** : Skip et continue avec l'appel suivant
 
 ## 🚀 Avantages Utilisateur
 
@@ -91,6 +96,25 @@ Page N: X leads → Total final affiché
 ## 🎯 Résultat Final
 
 **Avant** : Timeout 504 après 5 minutes d'attente  
-**Maintenant** : 2400 leads traités en 10 minutes avec affichage continu !
+**Maintenant** : 2400 leads traités avec 48 appels API séparés en 10 minutes !
 
-🔥 **L'utilisateur voit ses leads apparaître en direct comme une "live feed" !**
+🔥 **L'utilisateur voit ses leads apparaître après chaque appel API comme une "live feed" !**
+
+## 📡 Exemple Concret
+
+**Fichier de 100 lignes :**
+```
+📡 API Call 1: Traite lignes 1-50 → 50 leads affichés
+📡 API Call 2: Traite lignes 51-100 → +50 leads (Total: 100)
+```
+
+**Fichier de 1000 lignes :**
+```
+📡 API Call 1: Lignes 1-50 → 50 leads
+📡 API Call 2: Lignes 51-100 → 100 leads
+📡 API Call 3: Lignes 101-150 → 150 leads
+...
+📡 API Call 20: Lignes 951-1000 → 1000 leads
+```
+
+**Chaque appel = Nouveau batch de leads visible immédiatement !**
