@@ -392,13 +392,12 @@ VERIFICATION: Your response must contain exactly ${dataRowCount} lead objects. C
 Data to process (${dataRowCount} rows expected):
 ${truncatedContent}`;
 
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiApiKey}`
-    },
-    body: JSON.stringify({
+  // Utiliser axios au lieu de fetch avec gestion d'erreurs
+  const axios = require('axios');
+  
+  let response;
+  try {
+    response = await axios.post('https://api.openai.com/v1/chat/completions', {
       model: 'gpt-3.5-turbo',
       messages: [
         {
@@ -411,23 +410,30 @@ ${truncatedContent}`;
         }
       ],
       temperature: 0.1
-    })
-  });
-
-  if (!response.ok) {
-    let errorMessage = `OpenAI API error: ${response.status} ${response.statusText}`;
-    try {
-      const errorData = await response.json();
-      if (errorData.error) {
-        errorMessage += ` - ${errorData.error.message || errorData.error.type || 'Unknown error'}`;
-      }
-    } catch (e) {
-      // Si on ne peut pas parser l'erreur, utiliser le status text
+    }, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiApiKey}`
+      },
+      timeout: 60000 // 60 secondes
+    });
+  } catch (error) {
+    console.error('❌ Error calling OpenAI API:', error);
+    
+    // Gestion spécifique des erreurs axios
+    if (error.response) {
+      console.error(`❌ OpenAI API error: ${error.response.status} - ${error.response.data?.error?.message || 'Unknown error'}`);
+      throw new Error(`OpenAI API error: ${error.response.status} - ${error.response.data?.error?.message || 'Unknown error'}`);
+    } else if (error.request) {
+      console.error('❌ No response from OpenAI API');
+      throw new Error('No response from OpenAI API - network or timeout error');
+    } else {
+      console.error(`❌ Request setup error: ${error.message}`);
+      throw new Error(`Request setup error: ${error.message}`);
     }
-    throw new Error(errorMessage);
   }
 
-  const data = await response.json();
+  const data = response.data;
   const content = data.choices[0]?.message?.content;
   
   if (!content) {
