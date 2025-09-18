@@ -17,6 +17,17 @@ const upload = multer({
  * POST /api/file-processing/process
  */
 router.post('/process', upload.single('file'), async (req, res) => {
+  // Set long timeout for file processing
+  req.setTimeout(300000); // 5 minutes
+  res.setTimeout(300000); // 5 minutes
+  
+  // Set headers to prevent proxy timeouts
+  res.set({
+    'Connection': 'keep-alive',
+    'Keep-Alive': 'timeout=300',
+    'X-Accel-Buffering': 'no' // Disable nginx buffering
+  });
+  
   try {
     const { userId, companyId, gigId } = req.body;
     const file = req.file;
@@ -86,8 +97,13 @@ router.post('/process', upload.single('file'), async (req, res) => {
     // Nettoyer le contenu du fichier
     const cleanedFileContent = cleanEmailAddresses(fileContent);
     
+    // Send initial response to keep connection alive
+    console.log('🚀 Starting file processing...');
+    
     // Traiter avec OpenAI
     const result = await processFileWithOpenAI(cleanedFileContent, fileType, userId, companyId, gigId);
+    
+    console.log('✅ File processing completed successfully');
     
     res.json({
       success: true,
@@ -376,7 +392,7 @@ async function processLargeFileInChunks(fileContent, fileType, lines, userId, co
   let failedChunks = 0;
   
   // Traiter les chunks en parallèle (limité à 5 simultanés pour éviter les limites de rate)
-  const maxConcurrent = 5;
+  const maxConcurrent = 3; // Reduced to avoid timeouts
   const chunkPromises = [];
   
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
