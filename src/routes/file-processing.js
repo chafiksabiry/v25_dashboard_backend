@@ -116,6 +116,173 @@ router.post('/process', upload.single('file'), async (req, res) => {
 /**
  * Fonction pour nettoyer les adresses email
  */
+// Nouvelle fonction pour traiter une page directement (sans chunking interne)
+async function processPageDirectlyWithOpenAI(pageContent, fileType, expectedRows) {
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  
+  if (!openaiApiKey) {
+    throw new Error('OpenAI API key not configured');
+  }
+
+  if (!openaiApiKey.startsWith('sk-')) {
+    throw new Error('Invalid OpenAI API key format');
+  }
+
+  const lines = pageContent.split('\n');
+  const dataRowCount = expectedRows; // Nombre exact de lignes de données attendues
+  
+  console.log(`🤖 Processing page directly with OpenAI: ${dataRowCount} data rows expected`);
+
+  // Tronquer le contenu si trop long
+  const maxContentLength = 25000;
+  let truncatedContent = pageContent;
+  if (pageContent.length > maxContentLength) {
+    truncatedContent = pageContent.substring(0, maxContentLength);
+    console.log(`✂️ Content truncated from ${pageContent.length} to ${maxContentLength} characters`);
+  }
+
+  // Prompt optimisé pour traitement direct d'une page
+  const prompt = `You must process EXACTLY ${dataRowCount} data rows and return EXACTLY ${dataRowCount} lead objects in JSON format.
+
+CRITICAL: You MUST process ALL ${dataRowCount} rows. Do not skip any rows. Do not stop early.
+
+Expected output structure:
+{
+  "leads": [
+    // EXACTLY ${dataRowCount} objects here
+    {
+      "Deal_Name": "FIRST_NAME LAST_NAME",
+      "Email_1": "REAL_EMAIL_FROM_DATA",
+      "Phone": "REAL_PHONE_FROM_DATA",
+      "Stage": "New",
+      "Pipeline": "Sales Pipeline"
+    }
+  ]
+}
+
+MANDATORY PROCESSING RULES:
+1. Process ALL ${dataRowCount} data rows (skip only the header row)
+2. Extract REAL email from "Email" column (last column)
+3. Extract REAL phone from "Téléphone 1" column  
+4. Extract REAL names from "Prénom" and "Nom" columns
+5. Combine Prénom + Nom for Deal_Name
+6. If email missing: use "no-email@placeholder.com"
+7. If phone missing: use empty string ""
+8. Return EXACTLY ${dataRowCount} lead objects
+
+COLUMN MAPPING FOR THIS FILE:
+- Column "Prénom" (index 6) → Deal_Name (first part)
+- Column "Nom" (index 7) → Deal_Name (second part)  
+- Column "Téléphone 1" (index 19) → Phone
+- Column "Email" (index 23) → Email_1
+
+VERIFICATION: Your response must contain exactly ${dataRowCount} lead objects. Count them before responding.
+
+Data to process (${dataRowCount} rows expected):
+${truncatedContent}`;
+
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${openaiApiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        max_tokens: 4000,
+        temperature: 0.1,
+      }),
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(`OpenAI API error: ${response.status} - ${errorData.error?.message || 'Unknown error'}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0].message.content;
+
+    // Parse JSON response
+    let parsedResponse;
+    try {
+      const jsonMatch = content.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        parsedResponse = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('No JSON found in response');
+      }
+    } catch (parseError) {
+      console.error('❌ JSON parsing failed:', parseError);
+      throw new Error('Failed to parse OpenAI response as JSON');
+    }
+
+    let processedLeads = parsedResponse.leads || [];
+    console.log(`🤖 OpenAI returned ${processedLeads.length}/${dataRowCount} leads`);
+
+    // Si OpenAI n'a pas retourné assez de leads, compléter par parsing direct
+    if (processedLeads.length < dataRowCount) {
+      const missingLeads = dataRowCount - processedLeads.length;
+      console.warn(`⚠️ OpenAI processed ${processedLeads.length}/${dataRowCount} leads. Adding ${missingLeads} leads from direct CSV parsing.`);
+      
+      // Parser les lignes manquantes directement
+      for (let i = processedLeads.length; i < dataRowCount; i++) {
+        const rowIndex = i + 1; // +1 car lines[0] est le header
+        const rowData = lines[rowIndex];
+        
+        if (rowData) {
+          const columns = rowData.split(',').map(col => col.replace(/^"|"$/g, '').trim());
+          
+          const prenom = columns[6] || '';
+          const nom = columns[7] || '';
+          const phone = columns[19] || '';
+          const email = columns[23] || '';
+          
+          const dealName = prenom && nom ? `${prenom} ${nom}` : 
+                          prenom ? `${prenom} Unknown` :
+                          nom ? `Unknown ${nom}` :
+                          email || `Lead from row ${rowIndex + 1}`;
+          
+          processedLeads.push({
+            Last_Activity_Time: null,
+            Deal_Name: dealName,
+            Email_1: email || 'no-email@placeholder.com',
+            Phone: phone,
+            Stage: "New",
+            Pipeline: "Sales Pipeline",
+            Project_Tags: [],
+            Prénom: prenom,
+            Nom: nom,
+            _isPlaceholder: true
+          });
+        }
+      }
+    }
+
+    console.log(`✅ Page processing completed: ${processedLeads.length} leads total`);
+
+    return {
+      leads: processedLeads,
+      validation: {
+        totalRows: dataRowCount,
+        validRows: processedLeads.length,
+        invalidRows: Math.max(0, dataRowCount - processedLeads.length),
+        errors: []
+      }
+    };
+
+  } catch (error) {
+    console.error('❌ Error in processPageDirectlyWithOpenAI:', error);
+    throw error;
+  }
+}
+
 function cleanEmailAddresses(content) {
   const lines = content.split('\n');
   const cleanedLines = lines.map((line, index) => {
@@ -668,8 +835,8 @@ router.post('/process-paginated', upload.single('file'), async (req, res) => {
     
     console.log(`📊 Page ${page}/${totalPages}: Processing ${pageLines.length} rows (${startIndex + 1}-${endIndex})`);
     
-    // Traiter cette page avec OpenAI
-    const result = await processFileWithOpenAI(pageContent, fileType);
+    // Traiter cette page directement avec OpenAI (sans chunking interne)
+    const result = await processPageDirectlyWithOpenAI(pageContent, fileType, pageLines.length);
     
     console.log(`✅ Page ${page} processed: ${result.leads.length} leads extracted`);
     
