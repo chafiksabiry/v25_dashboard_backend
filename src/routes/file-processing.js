@@ -13,7 +13,7 @@ const upload = multer({
 });
 
 /**
- * Endpoint pour traiter les fichiers avec OpenAI
+ * Endpoint pour traiter les fichiers avec OpenAI (avec pagination)
  * POST /api/file-processing/process
  */
 router.post('/process', upload.single('file'), async (req, res) => {
@@ -583,5 +583,119 @@ function tryRecoverIncompleteJSON(content, expectedLeads) {
     return null;
   }
 }
+
+/**
+ * Nouveau endpoint pour traitement paginé
+ * POST /api/file-processing/process-paginated
+ */
+router.post('/process-paginated', upload.single('file'), async (req, res) => {
+  // Timeout plus court pour les petites pages
+  req.setTimeout(120000); // 2 minutes
+  res.setTimeout(120000); // 2 minutes
+  
+  try {
+    const file = req.file;
+    const { page = 1, pageSize = 50 } = req.body;
+    
+    console.log(`📄 Processing file page ${page} with pageSize ${pageSize}:`, file?.originalname);
+
+    if (!file) {
+      return res.status(400).json({
+        success: false,
+        error: 'No file uploaded'
+      });
+    }
+
+    // Traiter le fichier selon son type
+    let fileContent = '';
+    let fileType = '';
+    
+    if (file.originalname.endsWith('.xlsx') || file.originalname.endsWith('.xls')) {
+      fileType = 'excel';
+      const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+      const sheetName = workbook.SheetNames[0];
+      const worksheet = workbook.Sheets[sheetName];
+      fileContent = XLSX.utils.sheet_to_csv(worksheet);
+    } else if (file.originalname.endsWith('.csv')) {
+      fileType = 'csv';
+      fileContent = file.buffer.toString('utf8');
+    } else if (file.originalname.endsWith('.json')) {
+      fileType = 'json';
+      fileContent = file.buffer.toString('utf8');
+    } else if (file.originalname.endsWith('.txt')) {
+      fileType = 'txt';
+      fileContent = file.buffer.toString('utf8');
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: 'Unsupported file type. Please upload CSV, Excel, JSON, or TXT files.'
+      });
+    }
+
+    // Nettoyer les adresses email
+    const cleanedFileContent = cleanEmailAddresses(fileContent);
+    
+    // Pagination du contenu
+    const lines = cleanedFileContent.split('\n');
+    const headerLine = lines[0];
+    const dataLines = lines.slice(1).filter(line => line.trim());
+    
+    const totalRows = dataLines.length;
+    const totalPages = Math.ceil(totalRows / pageSize);
+    const startIndex = (page - 1) * pageSize;
+    const endIndex = Math.min(startIndex + pageSize, totalRows);
+    
+    if (startIndex >= totalRows) {
+      return res.json({
+        success: true,
+        data: {
+          leads: [],
+          pagination: {
+            currentPage: page,
+            totalPages,
+            totalRows,
+            pageSize,
+            hasNextPage: false,
+            hasPreviousPage: page > 1
+          }
+        }
+      });
+    }
+    
+    // Extraire les lignes pour cette page
+    const pageLines = dataLines.slice(startIndex, endIndex);
+    const pageContent = [headerLine, ...pageLines].join('\n');
+    
+    console.log(`📊 Page ${page}/${totalPages}: Processing ${pageLines.length} rows (${startIndex + 1}-${endIndex})`);
+    
+    // Traiter cette page avec OpenAI
+    const result = await processFileWithOpenAI(pageContent, fileType);
+    
+    console.log(`✅ Page ${page} processed: ${result.leads.length} leads extracted`);
+    
+    res.json({
+      success: true,
+      data: {
+        leads: result.leads,
+        pagination: {
+          currentPage: parseInt(page),
+          totalPages,
+          totalRows,
+          pageSize: parseInt(pageSize),
+          hasNextPage: page < totalPages,
+          hasPreviousPage: page > 1,
+          processedRows: pageLines.length
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Error in paginated processing:', error);
+    res.status(500).json({
+      success: false,
+      error: error.message || 'Internal server error during paginated processing'
+    });
+  }
+});
 
 module.exports = router;
