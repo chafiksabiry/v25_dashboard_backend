@@ -595,7 +595,7 @@ router.post('/process-paginated', upload.single('file'), async (req, res) => {
   
   try {
     const file = req.file;
-    const { page = 1, pageSize = 50 } = req.body;
+    const { page = 1, pageSize = 25 } = req.body;
     
     console.log(`📄 Processing file page ${page} with pageSize ${pageSize}:`, file?.originalname);
 
