@@ -16,6 +16,7 @@ const config = {
   REACT_APP_URL: process.env.REACT_APP_URL,
   BACKEND_URL: process.env.BACKEND_URL,
   ZOHO_SALESIQ_PORTAL_ID: process.env.ZOHO_SALESIQ_PORTAL_ID,
+  OPENAI_API_KEY: process.env.OPENAI_API_KEY,
 };
 
 
