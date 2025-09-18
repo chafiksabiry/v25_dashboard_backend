@@ -1,7 +1,7 @@
 const initializeZohoConfig = require('./controllers/zoho').initializeZohoConfig;
 
 // Import du scheduler Zoho
-const { startZohoTokenScheduler } = require(./schedulers/zohoTokenScheduler');
+const { startZohoTokenScheduler } = require('./schedulers/zohoTokenScheduler');
 
 // ... autres imports et configurations ...
 
