@@ -32,6 +32,12 @@ router.post('/process', upload.single('file'), async (req, res) => {
     const { userId, companyId, gigId } = req.body;
     const file = req.file;
 
+    // Debug: Log the received IDs
+    console.log('🔍 Received IDs from frontend:');
+    console.log(`   userId: ${userId}`);
+    console.log(`   companyId: ${companyId}`);
+    console.log(`   gigId: ${gigId}`);
+
     if (!file) {
       return res.status(400).json({
         success: false,
