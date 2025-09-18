@@ -29,26 +29,14 @@ router.post('/process', upload.single('file'), async (req, res) => {
   });
   
   try {
-    const { userId, companyId, gigId } = req.body;
     const file = req.file;
 
-    // Debug: Log the received IDs
-    console.log('🔍 Received IDs from frontend:');
-    console.log(`   userId: ${userId}`);
-    console.log(`   companyId: ${companyId}`);
-    console.log(`   gigId: ${gigId}`);
+    console.log('📁 Processing file:', file?.originalname);
 
     if (!file) {
       return res.status(400).json({
         success: false,
         error: 'No file uploaded'
-      });
-    }
-
-    if (!userId || !companyId || !gigId) {
-      return res.status(400).json({
-        success: false,
-        error: 'Missing required parameters: userId, companyId, gigId'
       });
     }
 
@@ -107,7 +95,7 @@ router.post('/process', upload.single('file'), async (req, res) => {
     console.log('🚀 Starting file processing...');
     
     // Traiter avec OpenAI
-    const result = await processFileWithOpenAI(cleanedFileContent, fileType, userId, companyId, gigId);
+    const result = await processFileWithOpenAI(cleanedFileContent, fileType);
     
     console.log('✅ File processing completed successfully');
     
@@ -157,7 +145,7 @@ function cleanEmailAddresses(content) {
 /**
  * Fonction pour traiter le fichier avec OpenAI
  */
-async function processFileWithOpenAI(fileContent, fileType, userId, companyId, gigId) {
+async function processFileWithOpenAI(fileContent, fileType) {
   const openaiApiKey = process.env.OPENAI_API_KEY;
   
   if (!openaiApiKey) {
@@ -176,7 +164,7 @@ async function processFileWithOpenAI(fileContent, fileType, userId, companyId, g
     console.log('🔄 Large file detected, using chunking approach');
     console.log(`📏 Content length: ${fileContent.length} characters`);
     console.log(`📊 Total lines: ${lines.length} (${lines.length - 1} data rows)`);
-    return await processLargeFileInChunks(fileContent, fileType, lines, userId, companyId, gigId);
+    return await processLargeFileInChunks(fileContent, fileType, lines);
   }
   
   // Pour les fichiers plus petits, traitement direct
@@ -196,9 +184,6 @@ Expected output structure:
   "leads": [
     // EXACTLY ${dataRowCount} objects here
     {
-      "userId": {"$oid": "${userId}"},
-      "companyId": {"$oid": "${companyId}"},
-      "gigId": {"$oid": "${gigId}"},
       "Deal_Name": "FIRST_NAME LAST_NAME",
       "Email_1": "REAL_EMAIL_FROM_DATA",
       "Phone": "REAL_PHONE_FROM_DATA",
@@ -303,9 +288,6 @@ ${truncatedContent}`;
     }
     
       return {
-        userId: lead.userId || { $oid: userId },
-        companyId: lead.companyId || { $oid: companyId },
-        gigId: lead.gigId || { $oid: gigId },
         Last_Activity_Time: lead.Last_Activity_Time || null,
         Deal_Name: dealName,
         Email_1: lead.Email_1 && lead.Email_1 !== 'email@exemple.com' ? lead.Email_1 : 'no-email@placeholder.com',
@@ -347,9 +329,6 @@ ${truncatedContent}`;
                         email || `Lead from row ${rowIndex + 1}`;
         
         processedLeads.push({
-          userId: { $oid: userId },
-          companyId: { $oid: companyId },
-          gigId: { $oid: gigId },
           Last_Activity_Time: null,
           Deal_Name: dealName,
           Email_1: email || 'no-email@placeholder.com',
@@ -382,7 +361,7 @@ ${truncatedContent}`;
 /**
  * Fonction pour traiter les gros fichiers par chunks
  */
-async function processLargeFileInChunks(fileContent, fileType, lines, userId, companyId, gigId) {
+async function processLargeFileInChunks(fileContent, fileType, lines) {
   const maxTokensPerChunk = 8000; // Reduced to ensure better processing
   const estimatedTokensPerLine = 25;
   const optimalChunkSize = Math.min(50, Math.floor(maxTokensPerChunk / estimatedTokensPerLine)); // Reduced chunk size to 50
@@ -410,7 +389,7 @@ async function processLargeFileInChunks(fileContent, fileType, lines, userId, co
       ...lines.slice(startLine, endLine + 1)
     ];
     
-    const chunkPromise = processFileWithOpenAI(chunkLines.join('\n'), fileType, userId, companyId, gigId);
+    const chunkPromise = processFileWithOpenAI(chunkLines.join('\n'), fileType);
     chunkPromises.push(chunkPromise);
     
     // Traiter par batch pour éviter de surcharger l'API
@@ -451,9 +430,6 @@ async function processLargeFileInChunks(fileContent, fileType, lines, userId, co
                                   email || `Lead from row ${rowIndex + 1}`;
                   
                   result.leads.push({
-                    userId: { $oid: userId },
-                    companyId: { $oid: companyId },
-                    gigId: { $oid: gigId },
                     Last_Activity_Time: null,
                     Deal_Name: dealName,
                     Email_1: email || 'no-email@placeholder.com',
@@ -493,9 +469,6 @@ async function processLargeFileInChunks(fileContent, fileType, lines, userId, co
                                 email || `Lead from row ${rowIndex + 1}`;
                 
                 allLeads.push({
-                  userId: { $oid: userId },
-                  companyId: { $oid: companyId },
-                  gigId: { $oid: gigId },
                   Last_Activity_Time: null,
                   Deal_Name: dealName,
                   Email_1: email || 'no-email@placeholder.com',
