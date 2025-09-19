@@ -12,6 +12,7 @@ const {
   getLeadsByUserId,
   getLeadsByPipelineAndStage,
   getLeadsByGigId,
+  searchLeadsByGigId,
   hasCompanyLeads
 } = require("../controllers/leads");
 
@@ -109,8 +110,8 @@ router.route("/:id/generate-script").post(generateScript);
 router.route("/user/:userId").get(getLeadsByUserId);
 router.route("/filter").get(getLeadsByPipelineAndStage);
 router.route("/gig/:gigId").get(getLeadsByGigId);
+router.route("/gig/:gigId/search").get(searchLeadsByGigId);
 router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
-router.route("/gig/:gigId").get(getLeadsByGigId);
 
 
 
