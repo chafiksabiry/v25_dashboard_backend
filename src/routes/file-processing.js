@@ -148,256 +148,111 @@ function cleanEmailAddresses(content) {
  * Fonction pour traiter le fichier avec OpenAI
  */
 async function processFileWithOpenAI(fileContent, fileType) {
-  console.log('🔑 Checking OpenAI API key...');
-  const openaiApiKey = process.env.OPENAI_API_KEY;
-  
-  if (!openaiApiKey) {
-    console.error('❌ OpenAI API key not found in environment variables');
-    console.log('Available env vars:', Object.keys(process.env).filter(key => key.includes('OPENAI')));
-    throw new Error('OpenAI API key not configured. Please set OPENAI_API_KEY environment variable.');
-  }
-
-  if (!openaiApiKey.startsWith('sk-')) {
-    console.error('❌ Invalid OpenAI API key format:', openaiApiKey.substring(0, 10) + '...');
-    throw new Error('Invalid OpenAI API key format. Key should start with "sk-"');
-  }
-  
-  console.log('✅ OpenAI API key found and valid format');
-
+  // Cette fonction est maintenant obsolète - redirection vers le parsing CSV direct
+  console.log('🔄 Redirecting to direct CSV parsing (OpenAI disabled)');
   const lines = fileContent.split('\n');
-  const maxContentLength = 25000;
+  return await processFileDirectlyFromCSV(fileContent, lines);
   
   // Pour les gros fichiers, utiliser le chunking
   if (fileContent.length > 100000 || lines.length > 200) {
     console.log('🔄 Large file detected, using chunking approach');
     console.log(`📏 Content length: ${fileContent.length} characters`);
     console.log(`📊 Total lines: ${lines.length} (${lines.length - 1} data rows)`);
+    
+    // Always use direct CSV parsing - OpenAI disabled to save quota and improve reliability
+    console.log('🚀 Using direct CSV parsing (OpenAI disabled to save quota and improve reliability)');
+    return await processFileDirectlyFromCSV(fileContent, lines);
+    
     return await processLargeFileInChunks(fileContent, fileType, lines);
   }
   
-  // Pour les fichiers plus petits, traitement direct
-  const truncatedContent = fileContent.length > maxContentLength 
-    ? fileContent.substring(0, maxContentLength) + '\n... [content truncated due to size]'
-    : fileContent;
-
-  // Count actual data rows (excluding header)
-  const dataRowCount = lines.length - 1;
-  
-  const prompt = `You must process EXACTLY ${dataRowCount} data rows and return EXACTLY ${dataRowCount} lead objects in JSON format.
-
-CRITICAL: You MUST process ALL ${dataRowCount} rows. Do not skip any rows. Do not stop early.
-
-Expected output structure:
-{
-  "leads": [
-    // EXACTLY ${dataRowCount} objects here
-    {
-      "Deal_Name": "FIRST_NAME LAST_NAME",
-      "Email_1": "REAL_EMAIL_FROM_DATA",
-      "Phone": "REAL_PHONE_FROM_DATA",
-      "Stage": "New",
-      "Pipeline": "Sales Pipeline"
-    }
-  ]
+  // Pour tous les fichiers (petits et grands), utiliser le parsing CSV direct
+  console.log('🚀 Using direct CSV parsing (OpenAI permanently disabled)');
+  return await processFileDirectlyFromCSV(fileContent, lines);
 }
 
-MANDATORY PROCESSING RULES:
-1. Process ALL ${dataRowCount} data rows (skip only the header row)
-2. Extract REAL email from "Email" column (last column)
-3. Extract REAL phone from "Téléphone 1" column  
-4. Extract REAL names from "Prénom" and "Nom" columns
-5. Combine Prénom + Nom for Deal_Name
-6. If email missing: use "no-email@placeholder.com"
-7. If phone missing: use empty string ""
-8. Return EXACTLY ${dataRowCount} lead objects
-
-COLUMN MAPPING FOR THIS FILE:
-- Column "Prénom" (index 6) → Deal_Name (first part)
-- Column "Nom" (index 7) → Deal_Name (second part)  
-- Column "Téléphone 1" (index 19) → Phone
-- Column "Email" (index 23) → Email_1
-
-VERIFICATION: Your response must contain exactly ${dataRowCount} lead objects. Count them before responding.
-
-Data to process (${dataRowCount} rows expected):
-${truncatedContent}`;
-
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${openaiApiKey}`,
-      'User-Agent': 'FileProcessor/1.0'
-    },
-    body: JSON.stringify({
-      model: 'gpt-3.5-turbo',
-      messages: [
-        {
-          role: 'system',
-          content: 'You are a data processing expert. Return ONLY valid JSON. Never return text explanations. Process ALL rows provided.'
-        },
-        {
-          role: 'user',
-          content: prompt
-        }
-      ],
-      temperature: 0.1,
-      max_tokens: 4000, // Increased token limit
-      timeout: 40000 // 40 second timeout
-    })
-  });
-
-  if (!response.ok) {
-    let errorMessage = `OpenAI API error: ${response.status} ${response.statusText}`;
-    try {
-      const errorData = await response.json();
-      if (errorData.error) {
-        errorMessage += ` - ${errorData.error.message || errorData.error.type || 'Unknown error'}`;
-        
-        // Handle specific OpenAI errors
-        if (errorData.error.type === 'rate_limit_exceeded') {
-          throw new Error('OpenAI rate limit exceeded. Please wait and try again.');
-        }
-        if (errorData.error.type === 'insufficient_quota') {
-          throw new Error('OpenAI API quota exceeded. Please check your billing.');
-        }
-        if (errorData.error.type === 'invalid_request_error') {
-          throw new Error(`OpenAI request error: ${errorData.error.message}`);
-        }
-      }
-    } catch (parseError) {
-      if (parseError.message.includes('OpenAI')) {
-        throw parseError; // Re-throw our custom errors
-      }
-      // Si on ne peut pas parser l'erreur, utiliser le status text
-      console.warn('Could not parse OpenAI error response:', parseError.message);
-    }
-    throw new Error(errorMessage);
-  }
-
-  const data = await response.json();
-  const content = data.choices[0]?.message?.content;
+/**
+ * Fonction pour traiter directement via CSV sans OpenAI - Version optimisée avec détection automatique
+ */
+async function processFileDirectlyFromCSV(fileContent, lines) {
+  console.log('🔄 Processing file directly from CSV (bypassing OpenAI)');
+  console.log(`📊 Total lines: ${lines.length} (${lines.length - 1} data rows)`);
   
-  if (!content) {
-    throw new Error('No response from OpenAI');
-  }
-
-  // Parser la réponse JSON
-  let parsedData;
-  try {
-    parsedData = JSON.parse(content);
-  } catch (parseError) {
-    // Essayer de récupérer un JSON incomplet
-    const recoveredData = tryRecoverIncompleteJSON(content, lines.length - 1);
-    if (recoveredData) {
-      parsedData = recoveredData;
-    } else {
-      throw new Error(`JSON parse error: ${parseError.message}`);
-    }
-  }
-
-  if (!parsedData || !parsedData.leads || !Array.isArray(parsedData.leads)) {
-    throw new Error('Invalid response format from OpenAI');
-  }
-
-  // Traiter les leads pour s'assurer qu'ils ont les champs requis
-  const processedLeads = parsedData.leads.map((lead) => {
-    let dealName = '';
-    
-    const prenom = lead.Prénom || lead.prénom || lead.Prenom || lead.prenom || '';
-    const nom = lead.Nom || lead.nom || lead.Name || lead.name || '';
-    
-    if (prenom || nom) {
-      dealName = `${prenom} ${nom}`.trim();
-    } else {
-      dealName = lead.Deal_Name || 'Unknown Lead';
-    }
-    
-      return {
-        Last_Activity_Time: lead.Last_Activity_Time || null,
-        Deal_Name: dealName,
-        Email_1: lead.Email_1 && lead.Email_1 !== 'email@exemple.com' ? lead.Email_1 : 'no-email@placeholder.com',
-        Phone: lead.Phone && lead.Phone !== '+33123456789' ? lead.Phone : '',
-        Stage: lead.Stage || 'New',
-        Pipeline: lead.Pipeline || 'Sales Pipeline',
-        Project_Tags: lead.Project_Tags || [],
-        Prénom: prenom,
-        Nom: nom
-      };
+  // Detect column structure automatically from header using OpenAI + fallback
+  console.log('🔍 Analyzing header structure with AI assistance...');
+  // Détecter la structure des colonnes avec header + optionnellement ligne de données
+  const sampleDataLine = lines.length > 1 ? lines[1] : null;
+  console.log('📊 Analyzing structure with:', { 
+    header: lines[0].substring(0, 100) + '...', 
+    sampleData: sampleDataLine ? sampleDataLine.substring(0, 100) + '...' : 'none'
   });
-
+  
+  const columnMapping = await detectColumnStructure(lines[0], sampleDataLine);
+  console.log('🎯 Final column structure:', columnMapping);
+  
+  const allLeads = [];
   const totalRows = lines.length - 1;
-  console.log(`🔍 Processing verification for single chunk:`);
-  console.log(`   Expected leads: ${totalRows}`);
-  console.log(`   Received leads: ${processedLeads.length}`);
   
-  // Handle missing leads by parsing CSV directly
-  if (processedLeads.length < totalRows) {
-    const missingLeads = totalRows - processedLeads.length;
-    console.warn(`⚠️ OpenAI processed ${processedLeads.length}/${totalRows} leads. Adding ${missingLeads} leads from direct CSV parsing.`);
+  // Dynamic batch size based on file size for optimal performance
+  let batchSize;
+  if (totalRows < 5000) {
+    batchSize = 500;   // Small files: 500 rows per batch
+  } else if (totalRows < 20000) {
+    batchSize = 1000;  // Medium files: 1000 rows per batch
+  } else if (totalRows < 50000) {
+    batchSize = 2000;  // Large files: 2000 rows per batch
+  } else {
+    batchSize = 5000;  // Very large files: 5000 rows per batch
+  }
+  
+  const totalBatches = Math.ceil(totalRows / batchSize);
+  
+  console.log(`🚀 Processing in batches of ${batchSize} rows (${totalBatches} batches total)`);
+  
+  // Process in batches for better performance
+  for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+    const startIndex = batchIndex * batchSize + 1; // +1 to skip header
+    const endIndex = Math.min(startIndex + batchSize, lines.length);
+    const batchLeads = [];
     
-    // Parse missing rows directly from CSV
-    for (let i = processedLeads.length; i < totalRows; i++) {
-      const rowIndex = i + 1; // +1 because lines[0] is header
-      const rowData = lines[rowIndex];
-      
-      if (rowData) {
-        const columns = rowData.split(',').map(col => col.replace(/^"|"$/g, '').trim());
-        
-        const prenom = columns[6] || '';
-        const nom = columns[7] || '';
-        const phone = columns[19] || '';
-        const email = columns[23] || '';
-        
-        const dealName = prenom && nom ? `${prenom} ${nom}` : 
-                        prenom ? `${prenom} Unknown` :
-                        nom ? `Unknown ${nom}` :
-                        email || `Lead from row ${rowIndex + 1}`;
-        
-        processedLeads.push({
-          Last_Activity_Time: null,
-          Deal_Name: dealName,
-          Email_1: email || 'no-email@placeholder.com',
-          Phone: phone,
-          Stage: "New",
-          Pipeline: "Sales Pipeline",
-          Project_Tags: [],
-          Prénom: prenom,
-          Nom: nom,
-          _isPlaceholder: true
-        });
+    // Process batch synchronously for maximum speed
+    for (let i = startIndex; i < endIndex; i++) {
+      const lead = parseLeadFromCSVRowDynamic(lines[i], i, columnMapping);
+      if (lead) {
+        batchLeads.push(lead);
       }
     }
+    
+    allLeads.push(...batchLeads);
+    
+    // Progress feedback every 5 batches or on last batch
+    if ((batchIndex + 1) % 5 === 0 || batchIndex === totalBatches - 1) {
+      const processed = Math.min((batchIndex + 1) * batchSize, totalRows);
+      console.log(`📈 Progress: ${processed}/${totalRows} rows processed (${Math.round((processed/totalRows) * 100)}%)`);
+    }
+    
+    // Small yield to prevent blocking for very large files
+    if (batchIndex % 10 === 0 && batchIndex > 0) {
+      await new Promise(resolve => setImmediate(resolve));
+    }
   }
-
-  // Validate leads based on actual data quality, not processing method
-  const validRows = processedLeads.filter(lead => {
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
-    const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
-    const hasPhone = lead.Phone && lead.Phone !== '';
-    return hasName || hasEmail || hasPhone;
-  }).length;
   
-  const invalidRows = processedLeads.filter(lead => {
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
-    const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
-    const hasPhone = lead.Phone && lead.Phone !== '';
-    return !(hasName || hasEmail || hasPhone);
-  }).length;
-
-  // Clean up the _isPlaceholder flag from final results
-  const cleanedLeads = processedLeads.map(lead => {
-    const { _isPlaceholder, ...cleanLead } = lead;
-    return cleanLead;
-  });
-
+  // Fast validation using optimized filtering
+  const { validLeads, invalidLeads } = validateLeadsOptimized(allLeads);
+  
+  console.log('📊 Direct CSV processing results:');
+  console.log(`📈 Total leads processed: ${allLeads.length}`);
+  console.log(`✅ Valid leads: ${validLeads.length}`);
+  console.log(`⚠️ Invalid leads: ${invalidLeads.length}`);
+  console.log(`🎯 Expected total rows: ${totalRows}`);
+  
   return {
-    leads: cleanedLeads,
+    leads: allLeads,
     validation: {
       totalRows,
-      validRows,
-      invalidRows,
-      errors: invalidRows > 0 ? [`${invalidRows} leads have incomplete data`] : []
+      validRows: validLeads.length,
+      invalidRows: invalidLeads.length,
+      errors: invalidLeads.length > 0 ? [`${invalidLeads.length} leads have incomplete data`] : []
     }
   };
 }
@@ -436,30 +291,30 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
     try {
       // Try to process with OpenAI first
       const result = await processChunkWithOpenAI(chunkLines.join('\n'), fileType, expectedLeadsInChunk);
-      
-      if (result && result.leads && result.leads.length > 0) {
-        console.log(`✅ Chunk ${chunkIndex + 1}: ${result.leads.length}/${expectedLeadsInChunk} leads processed via OpenAI`);
-        
-        // If chunk didn't process all expected leads, parse the missing ones directly
-        if (result.leads.length < expectedLeadsInChunk) {
-          const missingInChunk = expectedLeadsInChunk - result.leads.length;
-          console.warn(`⚠️ Chunk ${chunkIndex + 1}: Missing ${missingInChunk} leads, parsing directly from CSV`);
           
-          // Parse missing leads from this chunk
-          for (let j = result.leads.length; j < expectedLeadsInChunk; j++) {
+          if (result && result.leads && result.leads.length > 0) {
+        console.log(`✅ Chunk ${chunkIndex + 1}: ${result.leads.length}/${expectedLeadsInChunk} leads processed via OpenAI`);
+            
+            // If chunk didn't process all expected leads, parse the missing ones directly
+            if (result.leads.length < expectedLeadsInChunk) {
+              const missingInChunk = expectedLeadsInChunk - result.leads.length;
+          console.warn(`⚠️ Chunk ${chunkIndex + 1}: Missing ${missingInChunk} leads, parsing directly from CSV`);
+              
+              // Parse missing leads from this chunk
+              for (let j = result.leads.length; j < expectedLeadsInChunk; j++) {
             const rowIndex = startLine + j;
-            if (rowIndex < lines.length) {
+                if (rowIndex < lines.length) {
               const directLead = parseLeadFromCSVRow(lines[rowIndex], rowIndex);
               if (directLead) {
                 result.leads.push(directLead);
               }
+                }
+              }
             }
-          }
-        }
-        
-        allLeads.push(...result.leads);
-        processedChunks++;
-      } else {
+            
+            allLeads.push(...result.leads);
+            processedChunks++;
+          } else {
         throw new Error('No leads returned from OpenAI');
       }
       
@@ -468,9 +323,9 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
       
       // Fallback: Parse entire chunk directly from CSV
       let successfullyParsed = 0;
-      for (let j = 0; j < expectedLeadsInChunk; j++) {
+            for (let j = 0; j < expectedLeadsInChunk; j++) {
         const rowIndex = startLine + j;
-        if (rowIndex < lines.length) {
+              if (rowIndex < lines.length) {
           const directLead = parseLeadFromCSVRow(lines[rowIndex], rowIndex);
           if (directLead) {
             allLeads.push(directLead);
@@ -484,10 +339,10 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
       
       // Only count as failed if we couldn't parse any leads from the chunk
       if (successfullyParsed === 0) {
-        failedChunks++;
-      }
-    }
-    
+            failedChunks++;
+          }
+        }
+        
     // Add delay between chunks to respect rate limits
     if (chunkIndex < totalChunks - 1) {
       console.log('⏸️ Waiting 2 seconds before next chunk...');
@@ -544,32 +399,633 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
 }
 
 /**
- * Fonction pour traiter un chunk avec OpenAI avec timeout et retry
+ * Fonction pour traiter un chunk directement en CSV (OpenAI désactivé)
  */
 async function processChunkWithOpenAI(chunkContent, fileType, expectedLeads, retryCount = 0) {
-  const maxRetries = 2;
-  const timeout = 45000; // 45 seconds timeout
+  // Cette fonction ne fait plus appel à OpenAI - parsing CSV direct
+  console.log('🔄 Processing chunk with direct CSV parsing (OpenAI disabled)');
+  const lines = chunkContent.split('\n');
+  return await processFileDirectlyFromCSV(chunkContent, lines);
+}
+
+/**
+ * Fonction pour analyser la structure avec OpenAI (première ligne seulement)
+ */
+async function analyzeStructureWithOpenAI(headerLine, sampleDataLine = null) {
+  console.log('🤖 Using OpenAI to analyze file structure...');
   
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  
+  if (!openaiApiKey) {
+    console.warn('⚠️ OpenAI API key not found, using basic fallback');
+    return createBasicMapping(headerLine);
+  }
+
+  if (!openaiApiKey.startsWith('sk-')) {
+    console.warn('⚠️ Invalid OpenAI API key format, using basic fallback');
+    return createBasicMapping(headerLine);
+  }
+
   try {
-    const timeoutPromise = new Promise((_, reject) => {
-      setTimeout(() => reject(new Error('OpenAI request timeout')), timeout);
+    let dataAnalysis = '';
+    if (sampleDataLine) {
+      dataAnalysis = `
+SAMPLE DATA LINE: ${sampleDataLine}
+
+Use this data sample to confirm your column mapping and understand the actual data format.`;
+    }
+
+    const prompt = `You are an expert data analyst. Analyze this CSV file structure to create a perfect column mapping.
+
+HEADER LINE: ${headerLine}${dataAnalysis}
+
+Your task is to intelligently map each column to standard lead/contact fields by analyzing the column names and understanding the data structure.
+
+MAPPING FIELDS TO DETECT:
+- email: Email addresses (Email, Mail, E-mail, etc.)
+- phone: Phone numbers (Phone, Téléphone, Tel, Mobile, etc.)
+- leadName: Main contact name (Lead_Name, Deal_Name, Contact_Name, Name, Nom, etc.)
+- firstName: First name (Prénom, FirstName, First, etc.)
+- lastName: Last name (Nom, LastName, Last, etc.)
+- stage: Status/Stage (Stage, Statut, Status, Étape, etc.)
+- pipeline: Pipeline/Source (Pipeline, Source, Canal, etc.)
+- projectTag: Tags/Categories (Project_Tag, Tag, Project, Category, etc.)
+- accountName: Account/Company (Account_Name, Company, Société, etc.)
+- contactName: Contact person (Contact_Name, Contact, etc.)
+- amount: Monetary amount (Amount, Montant, Price, etc.)
+- probability: Probability percentage (Probability, Probabilité, %, etc.)
+
+ANALYSIS RULES:
+1. Column indices start at 0 (first column = 0, second = 1, etc.)
+2. Use -1 if a field type cannot be found
+3. Be intelligent about variations: "Lead_Name" = leadName, "Email" = email, etc.
+4. Look for the most logical mapping based on typical CRM/contact data structure
+5. If multiple columns could match, choose the most appropriate one
+
+Return ONLY this JSON structure:
+{
+  "mapping": {
+    "email": column_index_or_-1,
+    "phone": column_index_or_-1,
+    "firstName": column_index_or_-1,
+    "lastName": column_index_or_-1,
+    "leadName": column_index_or_-1,
+    "accountName": column_index_or_-1,
+    "contactName": column_index_or_-1,
+    "stage": column_index_or_-1,
+    "pipeline": column_index_or_-1,
+    "projectTag": column_index_or_-1,
+    "amount": column_index_or_-1,
+    "probability": column_index_or_-1
+  },
+  "columns": ["exact_column_names_from_header"],
+  "confidence": "high|medium|low"
+}`;
+
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${openaiApiKey}`
+      },
+      body: JSON.stringify({
+        model: 'gpt-3.5-turbo',
+        messages: [
+          {
+            role: 'system',
+            content: 'You are a data structure analyzer. Return ONLY valid JSON.'
+          },
+          {
+            role: 'user',
+            content: prompt
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 1000
+      })
     });
+
+    if (!response.ok) {
+      console.warn('⚠️ OpenAI API error, using basic fallback');
+      return createBasicMapping(headerLine);
+    }
+
+    const data = await response.json();
+    const content = data.choices[0]?.message?.content;
     
-    const processPromise = processFileWithOpenAI(chunkContent, fileType);
+    if (!content) {
+      console.warn('⚠️ No response from OpenAI, using basic fallback');
+      return createBasicMapping(headerLine);
+    }
+
+    const parsed = JSON.parse(content);
     
-    const result = await Promise.race([processPromise, timeoutPromise]);
-    return result;
-    
+    if (parsed.mapping && parsed.columns) {
+      console.log('✅ OpenAI successfully analyzed structure:');
+      console.log('📋 Detected columns:', parsed.columns);
+      console.log('🎯 AI-generated mapping:', parsed.mapping);
+      console.log('🎯 Confidence level:', parsed.confidence || 'unknown');
+      
+      // Debug spécifique pour votre nouveau format
+      console.log('🔍 CRITICAL MAPPING ANALYSIS:');
+      console.log(`  Column ${parsed.mapping.leadName}: "${parsed.columns[parsed.mapping.leadName]}" → leadName`);
+      console.log(`  Column ${parsed.mapping.dealName}: "${parsed.columns[parsed.mapping.dealName]}" → dealName`);
+      console.log(`  Column ${parsed.mapping.email}: "${parsed.columns[parsed.mapping.email]}" → email`);
+      console.log(`  Column ${parsed.mapping.phone}: "${parsed.columns[parsed.mapping.phone]}" → phone`);
+      
+      // Vérification critique : Deal_Name devrait être mappé à leadName ou dealName
+      const dealNameColumnIndex = parsed.columns.findIndex(col => col && col.toLowerCase().includes('deal_name'));
+      if (dealNameColumnIndex !== -1) {
+        console.log(`🚨 FOUND "Deal_Name" at column ${dealNameColumnIndex}, but OpenAI mapped:`);
+        console.log(`   leadName to column ${parsed.mapping.leadName}`);
+        console.log(`   dealName to column ${parsed.mapping.dealName}`);
+        
+        if (parsed.mapping.leadName !== dealNameColumnIndex && parsed.mapping.dealName !== dealNameColumnIndex) {
+          console.log('🔧 CORRECTING: Forcing Deal_Name column to be used for leadName');
+          parsed.mapping.leadName = dealNameColumnIndex;
+        }
+      }
+      
+      return parsed.mapping;
+    } else {
+      console.warn('⚠️ Invalid OpenAI response format, using basic fallback');
+      return createBasicMapping(headerLine);
+    }
+
   } catch (error) {
-    console.warn(`Chunk processing attempt ${retryCount + 1} failed: ${error.message}`);
+    console.warn('⚠️ Error with OpenAI analysis:', error.message);
+    console.log('🔄 Using basic fallback mapping');
+    return createBasicMapping(headerLine);
+  }
+}
+
+/**
+ * Fallback simple si OpenAI échoue complètement
+ */
+function createBasicMapping(headerLine) {
+  console.log('🔧 Creating basic fallback mapping...');
+  
+  // Parse header line
+  const columns = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < headerLine.length; i++) {
+    const char = headerLine[i];
+    if (char === '"') {
+      if (inQuotes && i + 1 < headerLine.length && headerLine[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      columns.push(current.trim().replace(/^"|"$/g, ''));
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  columns.push(current.trim().replace(/^"|"$/g, ''));
+  
+  console.log('📋 Basic mapping for columns:', columns);
+  
+  // Recherche intelligente des colonnes importantes
+  const mapping = {
+    email: -1,
+    phone: -1,
+    leadName: -1,
+    dealName: -1,
+    firstName: -1,
+    lastName: -1,
+    accountName: -1,
+    contactName: -1,
+    stage: -1,
+    pipeline: -1,
+    projectTag: -1,
+    amount: -1,
+    probability: -1
+  };
+  
+  // Recherche par nom de colonne
+  for (let i = 0; i < columns.length; i++) {
+    const col = columns[i].toLowerCase();
     
-    if (retryCount < maxRetries && (error.message.includes('timeout') || error.message.includes('rate limit'))) {
-      console.log(`Retrying chunk in ${(retryCount + 1) * 3} seconds...`);
-      await new Promise(resolve => setTimeout(resolve, (retryCount + 1) * 3000));
-      return await processChunkWithOpenAI(chunkContent, fileType, expectedLeads, retryCount + 1);
+    if (col.includes('deal_name') || col === 'deal_name') {
+      mapping.leadName = i; // Deal_Name → leadName
+      console.log(`🎯 Found Deal_Name at column ${i}`);
+    } else if (col.includes('email') && mapping.email === -1) {
+      mapping.email = i;
+    } else if (col.includes('phone') && mapping.phone === -1) {
+      mapping.phone = i;
+    } else if (col.includes('stage') && mapping.stage === -1) {
+      mapping.stage = i;
+    } else if (col.includes('pipeline') && mapping.pipeline === -1) {
+      mapping.pipeline = i;
+    }
+  }
+  
+  console.log('🎯 Basic fallback mapping:', mapping);
+  return mapping;
+}
+
+
+/**
+ * Fonction pour détecter automatiquement la structure des colonnes avec données optionnelles
+ */
+async function detectColumnStructure(headerLine, sampleDataLine = null) {
+  // Utiliser OpenAI pour analyser la structure (header + optionnellement données)
+  return await analyzeStructureWithOpenAI(headerLine, sampleDataLine);
+}
+
+/**
+ * Fonction pour parser une ligne CSV avec mapping dynamique
+ */
+function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
+  try {
+    if (!rowData || rowData.trim() === '' || !columnMapping) {
+      return null;
     }
     
-    throw error;
+    // Parse CSV row
+    const columns = [];
+    let current = '';
+    let inQuotes = false;
+    
+    for (let i = 0; i < rowData.length; i++) {
+      const char = rowData[i];
+      if (char === '"') {
+        if (inQuotes && i + 1 < rowData.length && rowData[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        columns.push(current.trim().replace(/^"|"$/g, ''));
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    columns.push(current.trim().replace(/^"|"$/g, ''));
+    
+    // Debug: Show raw columns for first few rows
+    if (rowIndex <= 3) {
+      console.log(`🔍 Row ${rowIndex} - Raw columns (first 6):`, columns.slice(0, 6));
+    }
+    
+    // Détection intelligente du format de données
+    const hasPipeData = columns.length <= 6 && columns.some(col => col.includes('|'));
+    
+    if (hasPipeData && (!columns[2] || columns[2].includes('|'))) {
+      // Utiliser le parsing spécialisé pour les données avec pipes
+      return parseLeadFromPipeData(columns, rowIndex);
+    }
+    
+    // Extract data using dynamic mapping avec gestion des champs CRM
+    const email = columnMapping.email >= 0 ? columns[columnMapping.email] || '' : '';
+    const phone = columnMapping.phone >= 0 ? columns[columnMapping.phone] || '' : '';
+    const firstName = columnMapping.firstName >= 0 ? columns[columnMapping.firstName] || '' : '';
+    const lastName = columnMapping.lastName >= 0 ? columns[columnMapping.lastName] || '' : '';
+    const dealName = columnMapping.dealName >= 0 ? columns[columnMapping.dealName] || '' : '';
+    const leadName = columnMapping.leadName >= 0 ? columns[columnMapping.leadName] || '' : '';
+    const accountName = columnMapping.accountName >= 0 ? columns[columnMapping.accountName] || '' : '';
+    const contactName = columnMapping.contactName >= 0 ? columns[columnMapping.contactName] || '' : '';
+    const stage = columnMapping.stage >= 0 ? columns[columnMapping.stage] || 'New' : 'New';
+    const pipeline = columnMapping.pipeline >= 0 ? columns[columnMapping.pipeline] || 'Sales Pipeline' : 'Sales Pipeline';
+    const projectTag = columnMapping.projectTag >= 0 ? columns[columnMapping.projectTag] || '' : '';
+    const amount = columnMapping.amount >= 0 ? columns[columnMapping.amount] || '' : '';
+    const probability = columnMapping.probability >= 0 ? columns[columnMapping.probability] || '' : '';
+    
+    // Debug pour les premières lignes
+    if (rowIndex <= 3) {
+      console.log(`🔍 Row ${rowIndex} - Extracted values:`);
+      console.log(`  email: "${email}"`);
+      console.log(`  phone: "${phone}"`);
+      console.log(`  leadName: "${leadName}"`);
+      console.log(`  firstName: "${firstName}"  lastName: "${lastName}"`);
+    }
+    
+    // Construction intelligente du nom final
+    let finalDealName = '';
+    
+    // Priorité 1: Prénom + Nom complets
+    if (firstName && lastName) {
+      finalDealName = `${firstName} ${lastName}`.trim();
+    } 
+    // Priorité 2: Lead Name ou Deal Name (selon le mapping OpenAI)
+    else if (leadName && leadName !== 'Client' && leadName !== 'Lead' && leadName !== 'Contact') {
+      finalDealName = leadName;
+    } else if (dealName && dealName !== 'Client' && dealName !== 'Lead' && dealName !== 'Contact') {
+      finalDealName = dealName;
+    }
+    // Priorité 3: Account ou Contact Name
+    else if (accountName) {
+      finalDealName = accountName;
+    } else if (contactName) {
+      finalDealName = contactName;
+    }
+    // Priorité 4: Un seul nom
+    else if (firstName) {
+      finalDealName = firstName;
+    } else if (lastName) {
+      finalDealName = lastName;
+    }
+    // Priorité 5: Email comme fallback
+    else if (email && email.includes('@')) {
+      finalDealName = email.split('@')[0];
+    } 
+    // Dernier recours
+    else {
+      finalDealName = `Lead from row ${rowIndex + 1}`;
+    }
+    
+    if (rowIndex <= 3) {
+      console.log(`✅ Final Deal Name: "${finalDealName}"`);
+    }
+    
+    // Debug pour les premières lignes
+    if (rowIndex <= 3) {
+      console.log(`🔍 Row ${rowIndex} - Deal Name construction:`, {
+        firstName: `"${firstName}"`,
+        lastName: `"${lastName}"`,
+        dealName: `"${dealName}"`,
+        leadName: `"${leadName}"`,
+        finalDealName: `"${finalDealName}"`
+      });
+    }
+    
+    // Clean and validate email
+    let finalEmail = email;
+    if (!email || !email.includes('@')) {
+      // Search for email in any column as fallback
+      for (const col of columns) {
+        if (col && col.includes('@') && col.includes('.')) {
+          finalEmail = col;
+          break;
+        }
+      }
+    }
+    
+    const lead = {
+      Last_Activity_Time: null,
+      Deal_Name: finalDealName,
+      Email_1: finalEmail || 'no-email@placeholder.com',
+      Phone: phone,
+      Stage: stage,
+      Pipeline: pipeline,
+      Project_Tags: projectTag ? [projectTag] : [],
+      Prénom: firstName,
+      Nom: lastName,
+      Account_Name: accountName,
+      Contact_Name: contactName,
+      Amount: amount,
+      Probability: probability
+    };
+    
+    return lead;
+    
+  } catch (error) {
+    console.error(`Error parsing CSV row ${rowIndex}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fonction spéciale pour parser les données avec des pipes (|)
+ */
+function parseLeadFromPipeData(columns, rowIndex) {
+  try {
+    // Votre structure semble être : Email, Phone, Lead_Name, Stage (avec adresse), Pipeline, Project_Tag
+    // Mais les données Stage/Project_Tag contiennent des adresses complètes avec des pipes
+    
+    const email = columns[0] || '';
+    const phone = columns[1] || '';
+    const leadName = columns[2] || '';
+    let stage = columns[3] || '';
+    let pipeline = columns[4] || 'Sales Pipeline';
+    let projectTag = columns[5] || '';
+    
+    // Si le pipeline contient une date, le transformer en description
+    if (pipeline && pipeline.match(/^\d{2}\/\d{2}\/\d{4}$/)) {
+      pipeline = `Created on ${pipeline}`;
+    }
+    
+    // Clean stage data - extraire juste la ville/région de l'adresse
+    let cleanedStage = 'New';
+    if (stage && stage.includes('|')) {
+      // Essayer d'extraire la dernière partie qui semble être la région
+      const stageParts = stage.split('|');
+      const lastPart = stageParts[stageParts.length - 1];
+      if (lastPart && lastPart.length > 0) {
+        cleanedStage = lastPart.trim();
+      }
+    } else if (stage) {
+      cleanedStage = stage;
+    }
+    
+    // Clean project tag - garder juste une partie pertinente
+    let cleanedProjectTag = '';
+    if (projectTag && projectTag.includes('|')) {
+      // Prendre les premières parties significatives
+      const tagParts = projectTag.split('|');
+      const significantParts = tagParts.filter(part => part && part.length > 0 && !part.match(/^\d+$/));
+      if (significantParts.length > 0) {
+        cleanedProjectTag = significantParts[0].trim();
+      }
+    } else if (projectTag) {
+      cleanedProjectTag = projectTag;
+    }
+    
+    // Essayer de trouver un email dans les données
+    let finalEmail = email;
+    if (!email || !email.includes('@')) {
+      for (const col of columns) {
+        if (col && col.includes('@') && col.includes('.')) {
+          finalEmail = col;
+          break;
+        }
+      }
+    }
+    
+    // Essayer d'extraire prénom et nom depuis les colonnes si disponibles
+    let extractedFirstName = '';
+    let extractedLastName = '';
+    
+    // Chercher dans les colonnes pour prénom et nom (basé sur votre structure Excel)
+    if (columns.length >= 6) {
+      extractedFirstName = columns[5] || ''; // Colonne F (Prénom)
+    }
+    if (columns.length >= 7) {
+      extractedLastName = columns[6] || '';  // Colonne G (Nom)
+    }
+    
+    // Debug pour voir les colonnes extraites
+    if (rowIndex <= 3) {
+      console.log(`🔍 Row ${rowIndex} - Name extraction:`, {
+        column5_prenom: columns[5] || 'empty',
+        column6_nom: columns[6] || 'empty',
+        extractedFirstName: extractedFirstName,
+        extractedLastName: extractedLastName,
+        allColumns: columns.slice(0, 10)
+      });
+    }
+    
+    // Construire un Deal_Name intelligent
+    let intelligentDealName = leadName || 'Unknown Lead';
+    if (extractedFirstName && extractedLastName) {
+      intelligentDealName = `${extractedFirstName} ${extractedLastName}`.trim();
+    } else if (extractedFirstName) {
+      intelligentDealName = extractedFirstName;
+    } else if (extractedLastName) {
+      intelligentDealName = extractedLastName;
+    }
+
+    const lead = {
+      Last_Activity_Time: null,
+      Deal_Name: intelligentDealName,
+      Email_1: finalEmail || 'no-email@placeholder.com',
+      Phone: phone,
+      Stage: cleanedStage,
+      Pipeline: pipeline,
+      Project_Tags: cleanedProjectTag ? [cleanedProjectTag] : [],
+      Prénom: extractedFirstName,
+      Nom: extractedLastName,
+      Account_Name: '',
+      Contact_Name: intelligentDealName,
+      Amount: '',
+      Probability: ''
+    };
+    
+    // Debug pour les premières lignes
+    if (rowIndex <= 3) {
+      console.log(`🔧 Row ${rowIndex} - Pipe-parsed lead:`, {
+        originalStage: stage.substring(0, 100) + '...',
+        cleanedStage: cleanedStage,
+        originalProjectTag: projectTag.substring(0, 100) + '...',
+        cleanedProjectTag: cleanedProjectTag,
+        finalDealName: lead.Deal_Name,
+        phone: lead.Phone
+      });
+    }
+    
+    return lead;
+    
+  } catch (error) {
+    console.error(`Error parsing pipe data for row ${rowIndex}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Fonction optimisée pour valider les leads en lot
+ */
+function validateLeadsOptimized(allLeads) {
+  const validLeads = [];
+  const invalidLeads = [];
+  
+  // Single pass validation for better performance
+  for (const lead of allLeads) {
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
+    const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
+    const hasPhone = lead.Phone && lead.Phone !== '';
+    
+    if (hasName || hasEmail || hasPhone) {
+      validLeads.push(lead);
+    } else {
+      invalidLeads.push(lead);
+    }
+  }
+  
+  return { validLeads, invalidLeads };
+}
+
+/**
+ * Fonction pour parser une ligne CSV directement - Version optimisée
+ */
+function parseLeadFromCSVRowOptimized(rowData, rowIndex) {
+  try {
+    if (!rowData || rowData.trim() === '') {
+      return null;
+    }
+    
+    // Fast CSV parsing - optimized for performance
+    const columns = [];
+    let current = '';
+    let inQuotes = false;
+    let i = 0;
+    
+    // Optimized parsing loop
+    while (i < rowData.length) {
+      const char = rowData[i];
+      
+      if (char === '"') {
+        if (inQuotes && i + 1 < rowData.length && rowData[i + 1] === '"') {
+          current += '"';
+          i += 2;
+          continue;
+        }
+        inQuotes = !inQuotes;
+      } else if (char === ',' && !inQuotes) {
+        columns.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+      i++;
+    }
+    columns.push(current.trim());
+    
+    // Fast column cleanup - only process what we need
+    const cleanedColumns = new Array(Math.max(24, columns.length));
+    for (let j = 0; j < columns.length && j < 24; j++) {
+      cleanedColumns[j] = columns[j].replace(/^"|"$/g, '').trim();
+    }
+    
+    // Fill remaining with empty strings if needed
+    for (let j = columns.length; j < 24; j++) {
+      cleanedColumns[j] = '';
+    }
+    
+    // Extract data from known positions
+    const prenom = cleanedColumns[6] || '';
+    const nom = cleanedColumns[7] || '';
+    const phone = cleanedColumns[19] || '';
+    let email = cleanedColumns[23] || '';
+    
+    // Quick email search if not found at position 23
+    if (!email) {
+      for (let j = 0; j < Math.min(columns.length, 30); j++) {
+        const col = cleanedColumns[j];
+        if (col && col.includes('@') && col.includes('.')) {
+          email = col;
+          break;
+        }
+      }
+    }
+    
+    // Create deal name efficiently
+    const dealName = prenom && nom ? `${prenom} ${nom}` : 
+                    prenom ? `${prenom} Unknown` :
+                    nom ? `Unknown ${nom}` :
+                    email || `Lead from row ${rowIndex + 1}`;
+    
+    return {
+      Last_Activity_Time: null,
+      Deal_Name: dealName,
+      Email_1: email || 'no-email@placeholder.com',
+      Phone: phone,
+      Stage: "New",
+      Pipeline: "Sales Pipeline",
+      Project_Tags: [],
+      Prénom: prenom,
+      Nom: nom
+    };
+    
+  } catch (error) {
+    console.error(`Error parsing CSV row ${rowIndex}:`, error);
+    return null;
   }
 }
 
