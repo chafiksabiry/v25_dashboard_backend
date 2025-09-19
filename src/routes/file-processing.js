@@ -3,6 +3,20 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const router = express.Router();
 
+/**
+ * Endpoint de test pour vérifier la communication frontend-backend
+ * GET /api/file-processing/test
+ */
+router.get('/test', (req, res) => {
+  console.log('🔍 Test endpoint called');
+  res.json({
+    success: true,
+    message: 'File processing API is working',
+    timestamp: new Date().toISOString(),
+    server: 'Backend v25_dashboard_backend'
+  });
+});
+
 // Configuration multer pour l'upload de fichiers
 const storage = multer.memoryStorage();
 const upload = multer({ 
@@ -21,11 +35,16 @@ router.post('/process', upload.single('file'), async (req, res) => {
   req.setTimeout(300000); // 5 minutes
   res.setTimeout(300000); // 5 minutes
   
-  // Set headers to prevent proxy timeouts
+  // Set headers to prevent proxy timeouts and improve frontend communication
   res.set({
     'Connection': 'keep-alive',
     'Keep-Alive': 'timeout=300',
-    'X-Accel-Buffering': 'no' // Disable nginx buffering
+    'X-Accel-Buffering': 'no', // Disable nginx buffering
+    'Cache-Control': 'no-cache',
+    'Content-Type': 'application/json',
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Methods': 'POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization'
   });
   
   try {
@@ -93,25 +112,77 @@ router.post('/process', upload.single('file'), async (req, res) => {
     // Nettoyer le contenu du fichier
     const cleanedFileContent = cleanEmailAddresses(fileContent);
     
-    // Send initial response to keep connection alive
+    // Log progression pour debugging frontend
     console.log('🚀 Starting file processing...');
+    console.log('📊 File info:', {
+      name: file.originalname,
+      size: file.size,
+      type: fileType,
+      contentLength: cleanedFileContent.length
+    });
     
     // Traiter avec OpenAI
+    const startTime = Date.now();
+    console.log('⏱️ Processing started at:', new Date().toISOString());
+    
     const result = await processFileWithOpenAI(cleanedFileContent, fileType);
     
+    const processingTime = (Date.now() - startTime) / 1000;
     console.log('✅ File processing completed successfully');
-    
-    res.json({
-      success: true,
-      data: result
+    console.log('⏱️ Processing time:', processingTime, 'seconds');
+    console.log('📊 Result summary:', {
+      totalRows: result.validation?.totalRows || 0,
+      validRows: result.validation?.validRows || 0,
+      invalidRows: result.validation?.invalidRows || 0,
+      leadsCount: result.leads?.length || 0
     });
+    
+    // Ensure proper JSON response
+    const response = {
+      success: true,
+      data: result,
+      meta: {
+        processingTime: processingTime,
+        timestamp: new Date().toISOString(),
+        fileInfo: {
+          name: file.originalname,
+          size: file.size,
+          type: fileType
+        }
+      }
+    };
+    
+    console.log('📤 Sending response to frontend...');
+    res.json(response);
 
   } catch (error) {
-    console.error('Error processing file:', error);
-    res.status(500).json({
+    console.error('❌ Error processing file:', error);
+    console.error('❌ Error stack:', error.stack);
+    
+    // Determine error type for better frontend handling
+    let errorType = 'unknown';
+    let statusCode = 500;
+    
+    if (error.message?.includes('timeout')) {
+      errorType = 'timeout';
+      statusCode = 408;
+    } else if (error.message?.includes('OpenAI')) {
+      errorType = 'openai_error';
+      statusCode = 503;
+    } else if (error.message?.includes('file')) {
+      errorType = 'file_processing_error';
+      statusCode = 400;
+    }
+    
+    const errorResponse = {
       success: false,
-      error: error.message || 'Error processing file'
-    });
+      error: error.message || 'Error processing file',
+      errorType: errorType,
+      timestamp: new Date().toISOString()
+    };
+    
+    console.log('📤 Sending error response to frontend:', errorResponse);
+    res.status(statusCode).json(errorResponse);
   }
 });
 
