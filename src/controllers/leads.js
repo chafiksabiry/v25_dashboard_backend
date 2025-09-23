@@ -380,6 +380,74 @@ exports.getLeadsByGigId = async (req, res) => {
   }
 };
 
+// @desc    Search leads by gig ID with search query
+// @route   GET /api/leads/gig/:gigId/search
+// @access  Private
+exports.searchLeadsByGigId = async (req, res) => {
+  try {
+    const { gigId } = req.params;
+    const { search } = req.query;
+
+    if (!gigId) {
+      return res.status(400).json({
+        success: false,
+        message: "Gig ID is required"
+      });
+    }
+
+    if (!search || search.trim() === '') {
+      return res.status(400).json({
+        success: false,
+        message: "Search query is required"
+      });
+    }
+
+    // Validate if gigId is a valid MongoDB ObjectId
+    if (!mongoose.Types.ObjectId.isValid(gigId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid gig ID format"
+      });
+    }
+
+    // Create search query for multiple fields
+    const searchQuery = {
+      gigId,
+      $or: [
+        { Deal_Name: { $regex: search, $options: 'i' } },
+        { Email_1: { $regex: search, $options: 'i' } },
+        { Phone: { $regex: search, $options: 'i' } },
+        { Pipeline: { $regex: search, $options: 'i' } },
+        { Stage: { $regex: search, $options: 'i' } }
+      ]
+    };
+
+    // Get all matching leads without pagination
+    const leads = await Lead.find(searchQuery)
+      .populate({
+        path: 'assignedTo',
+        select: 'name email',
+        options: { lean: true }
+      })
+      .select('_id id Activity_Tag Deal_Name Email_1 Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
+      .sort({ updatedAt: -1 }); // Sort by most recent first
+
+    res.status(200).json({
+      success: true,
+      count: leads.length,
+      total: leads.length,
+      searchQuery: search,
+      data: leads
+    });
+  } catch (err) {
+    console.error('Error in searchLeadsByGigId:', err);
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
+
 // @desc    Check if company has leads
 // @route   GET /api/leads/company/:companyId/has-leads
 // @access  Private
