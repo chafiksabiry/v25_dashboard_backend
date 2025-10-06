@@ -5,9 +5,9 @@ const corsOptions = {
     const allowedOrigins = [
       'https://v25.harx.ai', 
       'https://api-dashboard.harx.ai', 
-      'https://v25-preprod.harx.ai',
-      'https://preprod-api-dashboard.harx.ai',
-      'https://preprod-comp-orchestrator.harx.ai',
+      'https://v25-prod.harx.ai',
+      'https://prod-api-dashboard.harx.ai',
+      'https://prod-comp-orchestrator.harx.ai',
       'https://comp-orchestrator.harx.ai',
       'http://localhost:5183', 
       'http://localhost:3000', 
@@ -22,7 +22,7 @@ const corsOptions = {
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      // Also allow any subdomain of harx.ai for development/preprod
+      // Also allow any subdomain of harx.ai for development/prod
       if (origin && origin.endsWith('.harx.ai')) {
         console.log('CORS allowing harx.ai subdomain:', origin);
         callback(null, true);

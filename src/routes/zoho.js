@@ -123,7 +123,7 @@ router.get('/auth/callback', async (req, res) => {
       { upsert: true }
     );
 
-    return res.redirect(`https://v25-preprod.harx.ai/app11?session=someGeneratedSessionId`);
+    return res.redirect(`https://v25-prod.harx.ai/app11?session=someGeneratedSessionId`);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
