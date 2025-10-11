@@ -40,7 +40,7 @@ router.post('/disconnect', disconnect);
 
 router.get('/auth', async (req, res) => {
   try {
-      const { clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope, redirect_url } = req.query;
+      const { clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope, redirect_url, state } = req.query;
       
       // Si des paramètres personnalisés sont fournis, créer une configuration personnalisée
       const customConfig = (clientId && clientSecret && redirectUri) ? {
@@ -55,12 +55,14 @@ router.get('/auth', async (req, res) => {
 
       let generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
       
-      // Ajouter redirect_url comme paramètre d'état pour le propager au callback
-      if (redirect_url) {
+      // Encoder le redirect_url dans le paramètre state
+      // Format: userId|redirect_url_encoded
+      if (redirect_url && state) {
+          const stateWithRedirect = `${state}|${Buffer.from(redirect_url).toString('base64')}`;
           const url = new URL(generatedAuthUrl);
-          url.searchParams.set('redirect_url', redirect_url);
+          url.searchParams.set('state', stateWithRedirect);
           generatedAuthUrl = url.toString();
-          console.log('💾 Added redirect_url to auth URL:', redirect_url);
+          console.log('💾 Encoded redirect_url in state parameter:', redirect_url);
       }
       
       res.json({ authUrl: generatedAuthUrl });
@@ -101,15 +103,30 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-    const { code, state, userId, redirect_url } = req.query;
+    const { code, state, userId } = req.query;
     
     // Check if code is present
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
     }
 
-    // Use either state or userId, with state taking precedence
-    const finalUserId = state || userId;
+    // Décoder le state pour extraire userId et redirect_url
+    // Format: userId|redirect_url_encoded
+    let finalUserId = state || userId;
+    let redirectUrl = null;
+    
+    if (state && typeof state === 'string' && state.includes('|')) {
+      const parts = state.split('|');
+      finalUserId = parts[0];
+      if (parts[1]) {
+        try {
+          redirectUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
+          console.log('🔓 Decoded redirect_url from state:', redirectUrl);
+        } catch (decodeError) {
+          console.error('Error decoding redirect_url:', decodeError);
+        }
+      }
+    }
 
     // Check if we have a valid userId
     if (!finalUserId || finalUserId.trim() === '') {
@@ -133,18 +150,14 @@ router.get('/auth/callback', async (req, res) => {
     );
 
     // Déterminer l'URL de redirection
-    // 1. Si redirect_url est fourni, l'utiliser
+    // 1. Si redirect_url a été décodé du state, l'utiliser
     // 2. Sinon, rediriger vers app11 par défaut
-    let redirectUrl = redirect_url 
-      ? decodeURIComponent(redirect_url) 
-      : 'https://v25.harx.ai/app11?session=someGeneratedSessionId';
+    const finalRedirectUrl = redirectUrl || 'https://v25.harx.ai/app11?session=someGeneratedSessionId';
     
-    // Ajouter les paramètres de callback si l'URL n'en a pas déjà
-    const url = new URL(redirectUrl);
-    if (!url.searchParams.has('code')) {
-      url.searchParams.set('code', code);
-      url.searchParams.set('state', finalUserId);
-    }
+    // Ajouter les paramètres de callback
+    const url = new URL(finalRedirectUrl);
+    url.searchParams.set('code', code);
+    url.searchParams.set('state', finalUserId);
     
     console.log('🔙 Redirecting to:', url.toString());
     return res.redirect(url.toString());
