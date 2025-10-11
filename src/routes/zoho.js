@@ -40,7 +40,7 @@ router.post('/disconnect', disconnect);
 
 router.get('/auth', async (req, res) => {
   try {
-      const { clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope } = req.query;
+      const { clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope, redirect_url } = req.query;
       
       // Si des paramètres personnalisés sont fournis, créer une configuration personnalisée
       const customConfig = (clientId && clientSecret && redirectUri) ? {
@@ -53,7 +53,16 @@ router.get('/auth', async (req, res) => {
           scope: scope || 'ZohoCRM.modules.ALL',
       } : null;
 
-      const generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
+      let generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
+      
+      // Ajouter redirect_url comme paramètre d'état pour le propager au callback
+      if (redirect_url) {
+          const url = new URL(generatedAuthUrl);
+          url.searchParams.set('redirect_url', redirect_url);
+          generatedAuthUrl = url.toString();
+          console.log('💾 Added redirect_url to auth URL:', redirect_url);
+      }
+      
       res.json({ authUrl: generatedAuthUrl });
   } catch (error) {
       res.status(500).json({ error: error.message });
@@ -92,7 +101,7 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-    const { code, state, userId } = req.query;
+    const { code, state, userId, redirect_url } = req.query;
     
     // Check if code is present
     if (!code) {
@@ -123,9 +132,24 @@ router.get('/auth/callback', async (req, res) => {
       { upsert: true }
     );
 
-    // Redirect to the frontend with the session
-    return res.redirect(`https://v25.harx.ai/app11?session=someGeneratedSessionId`);
+    // Déterminer l'URL de redirection
+    // 1. Si redirect_url est fourni, l'utiliser
+    // 2. Sinon, rediriger vers app11 par défaut
+    let redirectUrl = redirect_url 
+      ? decodeURIComponent(redirect_url) 
+      : 'https://v25.harx.ai/app11?session=someGeneratedSessionId';
+    
+    // Ajouter les paramètres de callback si l'URL n'en a pas déjà
+    const url = new URL(redirectUrl);
+    if (!url.searchParams.has('code')) {
+      url.searchParams.set('code', code);
+      url.searchParams.set('state', finalUserId);
+    }
+    
+    console.log('🔙 Redirecting to:', url.toString());
+    return res.redirect(url.toString());
   } catch (error) {
+    console.error('Error in /auth/callback:', error);
     res.status(500).json({ error: error.message });
   }
 });
