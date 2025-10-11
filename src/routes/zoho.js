@@ -42,31 +42,46 @@ router.get('/auth', async (req, res) => {
   try {
       const { clientId, clientSecret, redirectUri, authUrl, tokenUrl, apiBaseUrl, scope, redirect_url, state } = req.query;
       
-      // Si des paramètres personnalisés sont fournis, créer une configuration personnalisée
-      const customConfig = (clientId && clientSecret && redirectUri) ? {
-          clientId,
-          clientSecret,
-          redirectUri,
-          authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
-          tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
-          apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
-          scope: scope || 'ZohoCRM.modules.ALL',
-      } : null;
-
-      let generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
-      
-      // Encoder le redirect_url dans le paramètre state
+      // Encoder le redirect_url dans le paramètre state AVANT de générer l'URL
       // Format: userId|redirect_url_encoded
+      let finalState = state || '';
       if (redirect_url && state) {
-          const stateWithRedirect = `${state}|${Buffer.from(redirect_url).toString('base64')}`;
-          const url = new URL(generatedAuthUrl);
-          url.searchParams.set('state', stateWithRedirect);
-          generatedAuthUrl = url.toString();
-          console.log('💾 Encoded redirect_url in state parameter:', redirect_url);
+          finalState = `${state}|${Buffer.from(redirect_url).toString('base64')}`;
+          console.log('💾 Encoding redirect_url in state parameter');
+          console.log('   Original state:', state);
+          console.log('   Redirect URL:', redirect_url);
+          console.log('   Final state:', finalState);
       }
+      
+      // Créer une configuration avec le state encodé
+      let customConfig = null;
+      
+      if (clientId && clientSecret && redirectUri) {
+          // Configuration personnalisée complète
+          customConfig = {
+              clientId,
+              clientSecret,
+              redirectUri,
+              authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
+              tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
+              apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
+              scope: scope || 'ZohoCRM.modules.ALL',
+              state: finalState
+          };
+      } else {
+          // Utiliser la config par défaut mais avec le state encodé
+          customConfig = {
+              ...zohoService.config,
+              state: finalState
+          };
+      }
+
+      const generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
+      console.log('🔗 Generated auth URL with state:', generatedAuthUrl.substring(0, 200) + '...');
       
       res.json({ authUrl: generatedAuthUrl });
   } catch (error) {
+      console.error('Error in /auth endpoint:', error);
       res.status(500).json({ error: error.message });
   }
 });
@@ -105,6 +120,11 @@ router.get('/auth/callback', async (req, res) => {
   try {
     const { code, state, userId } = req.query;
     
+    console.log('🔙 OAuth callback received');
+    console.log('   Code:', code ? code.substring(0, 20) + '...' : 'none');
+    console.log('   State:', state);
+    console.log('   UserId param:', userId);
+    
     // Check if code is present
     if (!code) {
       return res.status(400).json({ error: 'Authorization code is required' });
@@ -115,16 +135,22 @@ router.get('/auth/callback', async (req, res) => {
     let finalUserId = state || userId;
     let redirectUrl = null;
     
-    if (state && typeof state === 'string' && state.includes('|')) {
-      const parts = state.split('|');
-      finalUserId = parts[0];
-      if (parts[1]) {
-        try {
-          redirectUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
-          console.log('🔓 Decoded redirect_url from state:', redirectUrl);
-        } catch (decodeError) {
-          console.error('Error decoding redirect_url:', decodeError);
+    if (state && typeof state === 'string') {
+      console.log('📦 Processing state parameter:', state);
+      if (state.includes('|')) {
+        const parts = state.split('|');
+        finalUserId = parts[0];
+        console.log('   Extracted userId:', finalUserId);
+        if (parts[1]) {
+          try {
+            redirectUrl = Buffer.from(parts[1], 'base64').toString('utf-8');
+            console.log('   🔓 Decoded redirect_url:', redirectUrl);
+          } catch (decodeError) {
+            console.error('   ❌ Error decoding redirect_url:', decodeError);
+          }
         }
+      } else {
+        console.log('   ⚠️ State does not contain | separator, using as userId only');
       }
     }
 
