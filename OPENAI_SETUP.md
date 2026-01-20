@@ -34,7 +34,7 @@ OPENAI_API_KEY=sk-your_actual_openai_api_key_here
 MONGODB_URI=mongodb://localhost:27017/harx_dashboard
 PORT=5000
 NODE_ENV=development
-FRONTEND_URL=https://v25.harx.ai
+FRONTEND_URL=https://harx25pageslinks.netlify.app
 ```
 
 ### 2. Get OpenAI API Key

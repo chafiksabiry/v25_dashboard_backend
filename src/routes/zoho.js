@@ -178,7 +178,7 @@ router.get('/auth/callback', async (req, res) => {
     // Déterminer l'URL de redirection
     // 1. Si redirect_url a été décodé du state, l'utiliser
     // 2. Sinon, rediriger vers app11 par défaut
-    const finalRedirectUrl = redirectUrl || 'https://v25.harx.ai/app11?session=someGeneratedSessionId';
+    const finalRedirectUrl = redirectUrl || 'https://harx25pageslinks.netlify.app/app11?session=someGeneratedSessionId';
     
     // Ajouter les paramètres de callback
     const url = new URL(finalRedirectUrl);
