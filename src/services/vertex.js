@@ -52,9 +52,9 @@ const auth = new GoogleAuth({
 });
 
 // Create an instance of VertexAI class with explicit project configuration
-const vertex_ai = new VertexAI({ 
-    project: project, 
-    location: location, 
+const vertex_ai = new VertexAI({
+    project: project,
+    location: location,
     googleAuthOptions: {
         keyFilename: keyPath,
         scopes: ['https://www.googleapis.com/auth/cloud-platform']
@@ -63,7 +63,7 @@ const vertex_ai = new VertexAI({
 
 // Create an instance of GenerativeModel class
 const generativeVisionModel = vertex_ai.getGenerativeModel({
-    model: 'gemini-1.5-flash-002',
+    model: 'gemini-1.5-flash',
 });
 
 // Get the summary of an audio 

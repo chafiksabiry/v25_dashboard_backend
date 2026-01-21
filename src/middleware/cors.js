@@ -8,7 +8,7 @@ const corsOptions = {
       'https://harxv25dashboardrepfront.netlify.app',
       'https://harxv25comporchestratorfront.netlify.app',
       'https://harxv25matchingfrontend.netlify.app',
-      'https://harxv25knowledgebasefrontend.netlify.app',
+      'https://harxv25knowledgebasefrontend.netlify.app/',
       'https://harxv25copilotfrontend.netlify.app',
       'https://harxv25trainingplatformfrontend.netlify.app',
       'https://harxv25searchcompanywizardfrontend.netlify.app',
