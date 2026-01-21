@@ -15,7 +15,7 @@ const clientId = process.env.QAUTH2_CLIENT_ID;
 const clientSecret = process.env.QAUTH2_CLIENT_SECRET;
 const scope = process.env.QAUTH2_SCOPE;
 const redirectUrl = process.env.REDIRECTION_URL;
-const project = process.env.QAUTH2_PROJECT_ID || 'harx-ai'; // Valeur par défaut
+const project = (process.env.QAUTH2_PROJECT_ID || 'harx-ai').replace(/"/g, '');
 const location = 'us-central1';
 
 // Vérifier que les variables d'environnement requises sont définies
@@ -63,7 +63,7 @@ const vertex_ai = new VertexAI({
 
 // Create an instance of GenerativeModel class
 const generativeVisionModel = vertex_ai.getGenerativeModel({
-    model: 'gemini-1.5-flash',
+    model: 'gemini-1.5-flash-001',
 });
 
 // Get the summary of an audio 
