@@ -10,13 +10,53 @@ const { generateAudioSummaryPrompt } = require('../prompts/call-summary-prompt')
 const { parseCleanJson } = require('../parsers/parse-call-scoring-result');
 
 
+const fs = require('fs');
+const fsPromises = require('fs').promises;
+
 // Retreive OAUTH2.0 credentials and Google Cloud variables form .env
 const clientId = process.env.QAUTH2_CLIENT_ID;
 const clientSecret = process.env.QAUTH2_CLIENT_SECRET;
 const scope = process.env.QAUTH2_SCOPE;
 const redirectUrl = process.env.REDIRECTION_URL;
-const project = (process.env.QAUTH2_PROJECT_ID || 'harx-ai').replace(/"/g, '');
+
+let projectID = (process.env.GOOGLE_CLOUD_PROJECT || process.env.QAUTH2_PROJECT_ID || 'harx-technologies-inc').replace(/"/g, '');
 const location = 'us-central1';
+
+// Setup credentials - match wizard/KB method (temp files)
+let vertexCredentialsPath;
+let storageCredentialsPath;
+
+const setupGCPCredentials = async () => {
+    const tempDir = path.join(__dirname, '../../temp');
+    if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    // Vertex AI Credentials
+    const vertexCreds = (process.env.VERTEX_AI_CREDENTIALS || process.env.GCP_VERTEX_AI_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
+    console.log('Setting up Vertex AI credentials...');
+    if (vertexCreds && vertexCreds.startsWith('{')) {
+        vertexCredentialsPath = path.join(tempDir, 'vertex-credentials.json');
+        await fsPromises.writeFile(vertexCredentialsPath, vertexCreds);
+        console.log('Using Vertex AI credentials from JSON env var');
+    } else {
+        vertexCredentialsPath = vertexCreds || path.join(__dirname, "../config/vertexServiceAccount.json");
+        console.log('Using Vertex AI credentials from path:', vertexCredentialsPath);
+    }
+
+    // Storage Credentials
+    const storageCreds = (process.env.CLOUD_STORAGE_CREDENTIALS || process.env.GCP_STORAGE_CREDENTIALS || process.env.GCP_CLOUD_STORAGE_CREDENTIALS || process.env.GCP_VERTEX_AI_CREDENTIALS || process.env.GOOGLE_APPLICATION_CREDENTIALS || '').trim();
+    console.log('Setting up Storage credentials...');
+    if (storageCreds && storageCreds.startsWith('{')) {
+        storageCredentialsPath = path.join(tempDir, 'storage-credentials.json');
+        await fsPromises.writeFile(storageCredentialsPath, storageCreds);
+        console.log('Using Storage credentials from JSON env var');
+    } else {
+        storageCredentialsPath = storageCreds || path.join(__dirname, "../config/vertexServiceAccount.json"); // Fallback to same key if others missing
+        console.log('Using Storage credentials from path:', storageCredentialsPath);
+    }
+};
+
 
 // Vérifier que les variables d'environnement requises sont définies
 const requiredEnvVars = {
@@ -35,36 +75,36 @@ if (missingVars.length > 0) {
     console.warn('Using default project ID:', project);
 }
 
-// Construct the absolute path to the service account JSON file
-const keyPath = path.join(__dirname, "../config/vertexServiceAccount.json");
+// Initialisation asynchrone pour Vertex AI
+let vertex_ai;
+let generativeVisionModel;
+let storage;
 
-// Vérifier si le fichier de service account existe
-const fs = require('fs');
-if (!fs.existsSync(keyPath)) {
-    console.warn('Warning: Service account file not found at:', keyPath);
-    console.warn('Make sure to place your service account JSON file at this location');
-}
+const initializeServices = async () => {
+    if (vertex_ai) return;
 
-// Authenticate to Google cloud using the vertex service account
-const auth = new GoogleAuth({
-    keyFilename: keyPath,
-    scopes: ['https://www.googleapis.com/auth/cloud-platform']
-});
+    await setupGCPCredentials();
 
-// Create an instance of VertexAI class with explicit project configuration
-const vertex_ai = new VertexAI({
-    project: project,
-    location: location,
-    googleAuthOptions: {
-        keyFilename: keyPath,
+    // Use raw options object for VertexAI
+    const vertexAuthOptions = {
+        keyFilename: vertexCredentialsPath,
         scopes: ['https://www.googleapis.com/auth/cloud-platform']
-    }
-});
+    };
 
-// Create an instance of GenerativeModel class
-const generativeVisionModel = vertex_ai.getGenerativeModel({
-    model: 'gemini-1.5-flash-001',
-});
+    // Allow model override via env var, but use gemini-2.0-flash as default
+    let modelName = process.env.VERTEX_AI_MODEL || 'gemini-2.0-flash';
+
+    console.log(`[VertexService] Initializing Generative Model: ${modelName} in project: ${projectID}`);
+
+    vertex_ai = new VertexAI({ project: projectID, location: location, googleAuthOptions: vertexAuthOptions });
+    generativeVisionModel = vertex_ai.getGenerativeModel({ model: modelName });
+
+    storage = new Storage({
+        projectId: projectID,
+        keyFilename: storageCredentialsPath
+    });
+};
+
 
 // Get the summary of an audio 
 exports.getAudioSummary = async (file_uri) => {
@@ -84,7 +124,9 @@ exports.getAudioSummary = async (file_uri) => {
                 ]
             }],
         };
+        await initializeServices();
         const streamingResp = await generativeVisionModel.generateContentStream(request);
+
         for await (const item of streamingResp.stream) {
             console.log('stream chunk: ', JSON.stringify(item));
         }
@@ -117,7 +159,9 @@ exports.getAudioTranscription = async (file_uri) => {
                 ]
             }],
         };
+        await initializeServices();
         const result = await generativeVisionModel.generateContent(request);
+
         /* for await (const item of streamingResp.stream) {
             console.log('stream chunk: ', JSON.stringify(item));
         } */
@@ -147,7 +191,9 @@ exports.getCallScoring = async (file_uri) => {
                 ]
             }],
         };
+        await initializeServices();
         const result = await generativeVisionModel.generateContent(request);
+
         const response = result.response;
         console.log('Response: ', JSON.stringify(response));
         return parseCleanJson(response.candidates[0].content.parts[0].text);
@@ -176,7 +222,9 @@ exports.getCallPostActions = async (file_uri) => {
                 ]
             }],
         };
+        await initializeServices();
         const result = await generativeVisionModel.generateContent(request);
+
         const response = result.response;
         console.log('Response: ', JSON.stringify(response));
         return parseCleanJson(response.candidates[0].content.parts[0].text);

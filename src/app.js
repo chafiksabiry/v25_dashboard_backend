@@ -21,8 +21,6 @@ const speechToText = require('./routes/speech-to-text');
 const vertex = require('./routes/vertex');
 const zoho = require('./routes/zoho');
 const fileProcessing = require('./routes/file-processing');
-const phoneNumbers = require('./routes/phone-numbers');
-
 
 // Connect to database
 connectDB()
@@ -75,8 +73,6 @@ app.use('/api/speechToText', speechToText);
 app.use('/api/vertex', vertex);
 app.use('/api/zoho', zoho); // Une seule route Zoho
 app.use('/api/file-processing', fileProcessing);
-app.use('/api/phone-numbers', phoneNumbers);
-
 
 // Middleware pour gérer les erreurs CORS
 app.use(handleCorsError);

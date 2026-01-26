@@ -1612,7 +1612,7 @@ const syncAllLeads = async (req, res) => {
             Authorization: `Zoho-oauthtoken ${accessToken}`,
             "Content-Type": "application/json",
           },
-          timeout: 30000 // 30 secondes timeout pour chaque requête
+          timeout: 3000000 // 30 secondes timeout pour chaque requête
         });
 
         if (response.data.data && Array.isArray(response.data.data)) {
