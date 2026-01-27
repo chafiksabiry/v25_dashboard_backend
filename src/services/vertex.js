@@ -72,7 +72,7 @@ const missingVars = Object.entries(requiredEnvVars)
 
 if (missingVars.length > 0) {
     console.warn('Warning: Missing environment variables:', missingVars.join(', '));
-    console.warn('Using default project ID:', project);
+    console.warn('Using default project ID:', projectID);
 }
 
 // Initialisation asynchrone pour Vertex AI
