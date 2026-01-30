@@ -50,7 +50,9 @@ app.options('*', corsMiddleware);
 // Middleware pour gérer les requêtes OPTIONS
 app.use((req, res, next) => {
   if (req.method === 'OPTIONS') {
-    res.header('Access-Control-Allow-Origin', req.headers.origin);
+    // Si origin est présent, on le renvoie, sinon *
+    const origin = req.headers.origin || '*';
+    res.header('Access-Control-Allow-Origin', origin);
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, x-channel, Accept, Origin, X-Requested-With, Cache-Control');
     res.header('Access-Control-Allow-Credentials', 'true');
