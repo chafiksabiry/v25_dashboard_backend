@@ -1,4 +1,4 @@
-const cors = require('cors');
+import cors from 'cors';
 
 const corsOptions = {
   origin: true, // Allow all origins for now to fix CORS issues
@@ -32,7 +32,7 @@ const handleCorsError = (err, req, res, next) => {
   next(err);
 };
 
-module.exports = {
+export default {
   corsMiddleware,
   handleCorsError,
   corsOptions
