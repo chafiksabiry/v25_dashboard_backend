@@ -444,7 +444,7 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
   // Validate leads based on actual data quality, not processing method
   const validLeads = allLeads.filter(lead => {
     // A lead is valid if it has at least a name or email
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && lead.Deal_Name !== '-';
     const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
     const hasPhone = lead.Phone && lead.Phone !== '';
 
@@ -452,7 +452,7 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
   });
 
   const invalidLeads = allLeads.filter(lead => {
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && lead.Deal_Name !== '-';
     const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
     const hasPhone = lead.Phone && lead.Phone !== '';
 
@@ -824,7 +824,7 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
     }
     // Dernier recours
     else {
-      finalDealName = `Lead from row ${rowIndex + 1}`;
+      finalDealName = '-';
     }
 
     if (rowIndex <= 3) {
@@ -1013,7 +1013,7 @@ function validateLeadsOptimized(allLeads) {
 
   // Single pass validation for better performance
   for (const lead of allLeads) {
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && lead.Deal_Name !== '-';
     const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
     const hasPhone = lead.Phone && lead.Phone !== '';
 
