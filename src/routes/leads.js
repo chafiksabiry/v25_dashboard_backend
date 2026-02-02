@@ -13,7 +13,8 @@ const {
   getLeadsByPipelineAndStage,
   getLeadsByGigId,
   searchLeadsByGigId,
-  hasCompanyLeads
+  hasCompanyLeads,
+  createLeadsBulk
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -104,6 +105,7 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
 
 
 router.route("/").get(getLeads).post(createLead);
+router.post("/bulk", createLeadsBulk); // Bulk create route
 router.route("/:id").get(getLead).put(updateLead).delete(deleteLead);
 router.route("/:id/analyze").post(analyzeLead);
 router.route("/:id/generate-script").post(generateScript);

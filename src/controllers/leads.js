@@ -139,7 +139,7 @@ exports.updateLead = async (req, res) => {
 
     // Trouver d'abord le lead existant
     const existingLead = await Lead.findById(req.params.id);
-    
+
     if (!existingLead) {
       return res.status(404).json({
         success: false,
@@ -480,6 +480,76 @@ exports.hasCompanyLeads = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in hasCompanyLeads:', err);
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
+
+// @desc    Create multiple leads
+// @route   POST /api/leads/bulk
+// @access  Private
+exports.createLeadsBulk = async (req, res) => {
+  try {
+    const { leads } = req.body;
+
+    if (!leads || !Array.isArray(leads) || leads.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "Leads array is required"
+      });
+    }
+
+    // Process leads to ensure they have correct IDs
+    const leadsToInsert = leads.map(lead => {
+      const { userId, gigId, ...leadData } = lead;
+      return {
+        ...leadData,
+        // Ensure ObjectId format if strings are passed
+        userId: userId?.$oid || userId || req.user?._id,
+        gigId: gigId?.$oid || gigId || req.gig?._id,
+        companyId: lead.companyId?.$oid || lead.companyId,
+        updatedAt: new Date(),
+        createdAt: new Date()
+      };
+    });
+
+    // Use insertMany with ordered: false to continue if some fail (though we validate before)
+    // But if we want atomicity, we shouldn't use ordered: false. 
+    // Usually for bulk upload, we want all or nothing OR partial success.
+    // Given the requirement "continue saving", partial success is better than fail all.
+    const result = await Lead.insertMany(leadsToInsert, { ordered: false });
+
+    res.status(201).json({
+      success: true,
+      count: result.length,
+      data: result,
+      message: `Successfully created ${result.length} leads`
+    });
+
+  } catch (err) {
+    console.error('Error in createLeadsBulk:', err);
+    // If it's a validation error or partial insertion error
+    if (err.name === 'ValidationError') {
+      return res.status(400).json({
+        success: false,
+        error: err.message,
+        details: err.errors
+      });
+    }
+    // If some succeeded and some failed (bulkWriteError)
+    if (err.insertedDocs && err.insertedDocs.length > 0) {
+      return res.status(207).json({ // 207 Multi-Status
+        success: true,
+        partial: true,
+        count: err.insertedDocs.length,
+        data: err.insertedDocs,
+        errors: err.writeErrors,
+        message: `Created ${err.insertedDocs.length} leads with some errors`
+      });
+    }
+
     res.status(400).json({
       success: false,
       error: err.message
