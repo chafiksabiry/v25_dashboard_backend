@@ -494,12 +494,20 @@ exports.createLeadsBulk = async (req, res) => {
   try {
     const { leads } = req.body;
 
+    // Log the start of the request
+    console.log(`[Bulk Create] Received request to create ${leads ? leads.length : 0} leads`);
+
     if (!leads || !Array.isArray(leads) || leads.length === 0) {
+      console.warn('[Bulk Create] Invalid or empty leads array received');
       return res.status(400).json({
         success: false,
         message: "Leads array is required"
       });
     }
+
+    // Log the size of the request body roughly
+    const size = JSON.stringify(leads).length;
+    console.log(`[Bulk Create] Payload size: ${(size / 1024 / 1024).toFixed(2)} MB`);
 
     // Process leads to ensure they have correct IDs
     const leadsToInsert = leads.map(lead => {
