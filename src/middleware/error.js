@@ -50,7 +50,7 @@ const errorHandler = (err, req, res, next) => {
         error: 'Connection Error'
       });
     }
-    
+
     if (err.response?.status === 520) {
       return res.status(520).json({
         success: false,
@@ -60,7 +60,7 @@ const errorHandler = (err, req, res, next) => {
     }
   }
 
-  res.status(error.statusCode || 500).json({
+  res.status(error.statusCode || error.status || 500).json({
     success: false,
     message: error.message || 'Server Error',
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
