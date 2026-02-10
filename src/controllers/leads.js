@@ -359,7 +359,7 @@ exports.getLeadsByGigId = async (req, res) => {
         select: 'name email',
         options: { lean: true }
       })
-      .select('_id id Activity_Tag Deal_Name Email_1 Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
+      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
       .skip(skip)
       .limit(limit);
 
@@ -415,10 +415,16 @@ exports.searchLeadsByGigId = async (req, res) => {
       gigId,
       $or: [
         { Deal_Name: { $regex: search, $options: 'i' } },
+        { First_Name: { $regex: search, $options: 'i' } },
+        { Last_Name: { $regex: search, $options: 'i' } },
         { Email_1: { $regex: search, $options: 'i' } },
         { Phone: { $regex: search, $options: 'i' } },
         { Pipeline: { $regex: search, $options: 'i' } },
-        { Stage: { $regex: search, $options: 'i' } }
+        { Stage: { $regex: search, $options: 'i' } },
+        { Activity_Tag: { $regex: search, $options: 'i' } },
+        { Address: { $regex: search, $options: 'i' } },
+        { Postal_Code: { $regex: search, $options: 'i' } },
+        { City: { $regex: search, $options: 'i' } }
       ]
     };
 
@@ -429,7 +435,7 @@ exports.searchLeadsByGigId = async (req, res) => {
         select: 'name email',
         options: { lean: true }
       })
-      .select('_id id Activity_Tag Deal_Name Email_1 Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
+      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
       .sort({ updatedAt: -1 }); // Sort by most recent first
 
     res.status(200).json({
@@ -480,84 +486,6 @@ exports.hasCompanyLeads = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in hasCompanyLeads:', err);
-    res.status(400).json({
-      success: false,
-      error: err.message
-    });
-  }
-};
-
-// @desc    Create multiple leads
-// @route   POST /api/leads/bulk
-// @access  Private
-exports.createLeadsBulk = async (req, res) => {
-  try {
-    const { leads } = req.body;
-
-    // Log the start of the request
-    console.log(`[Bulk Create] Received request to create ${leads ? leads.length : 0} leads`);
-
-    if (!leads || !Array.isArray(leads) || leads.length === 0) {
-      console.warn('[Bulk Create] Invalid or empty leads array received');
-      return res.status(400).json({
-        success: false,
-        message: "Leads array is required"
-      });
-    }
-
-    // Log the size of the request body roughly
-    const size = JSON.stringify(leads).length;
-    console.log(`[Bulk Create] Payload size: ${(size / 1024 / 1024).toFixed(2)} MB`);
-
-    // Process leads to ensure they have correct IDs
-    const leadsToInsert = leads.map(lead => {
-      const { userId, gigId, ...leadData } = lead;
-      return {
-        ...leadData,
-        // Ensure ObjectId format if strings are passed
-        userId: userId?.$oid || userId || req.user?._id,
-        gigId: gigId?.$oid || gigId || req.gig?._id,
-        companyId: lead.companyId?.$oid || lead.companyId,
-        updatedAt: new Date(),
-        createdAt: new Date()
-      };
-    });
-
-    // Use insertMany with ordered: false to continue if some fail (though we validate before)
-    // But if we want atomicity, we shouldn't use ordered: false. 
-    // Usually for bulk upload, we want all or nothing OR partial success.
-    // Given the requirement "continue saving", partial success is better than fail all.
-    const result = await Lead.insertMany(leadsToInsert, { ordered: false });
-
-    res.status(201).json({
-      success: true,
-      count: result.length,
-      data: result,
-      message: `Successfully created ${result.length} leads`
-    });
-
-  } catch (err) {
-    console.error('Error in createLeadsBulk:', err);
-    // If it's a validation error or partial insertion error
-    if (err.name === 'ValidationError') {
-      return res.status(400).json({
-        success: false,
-        error: err.message,
-        details: err.errors
-      });
-    }
-    // If some succeeded and some failed (bulkWriteError)
-    if (err.insertedDocs && err.insertedDocs.length > 0) {
-      return res.status(207).json({ // 207 Multi-Status
-        success: true,
-        partial: true,
-        count: err.insertedDocs.length,
-        data: err.insertedDocs,
-        errors: err.writeErrors,
-        message: `Created ${err.insertedDocs.length} leads with some errors`
-      });
-    }
-
     res.status(400).json({
       success: false,
       error: err.message

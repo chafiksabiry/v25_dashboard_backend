@@ -38,6 +38,30 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  First_Name: {
+    type: String,
+    required: false
+  },
+  Last_Name: {
+    type: String,
+    required: false
+  },
+  Address: {
+    type: String,
+    required: false
+  },
+  Postal_Code: {
+    type: String,
+    required: false
+  },
+  City: {
+    type: String,
+    required: false
+  },
+  Date_of_Birth: {
+    type: String,
+    required: false
+  },
   Stage: { //
     type: String,
     required: false
@@ -46,7 +70,7 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false,
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
       },
       message: props => `${props.value} is not a valid email address!`
@@ -70,7 +94,7 @@ const leadSchema = new mongoose.Schema({
   }
 });
 
-leadSchema.pre('save', function(next) {
+leadSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });

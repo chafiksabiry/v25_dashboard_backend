@@ -83,28 +83,13 @@ router.post('/process', upload.single('file'), async (req, res) => {
       console.log('Total rows:', jsonData.length);
 
       // Convertir en format CSV pour OpenAI
-      const headers = jsonData[0] || [];
+      const headers = jsonData[0];
       const dataRows = jsonData.slice(1);
 
-      // Check if this looks like a "CSV in Excel" (everything in column A)
-      const isCsvInExcel = headers.length === 1 && typeof headers[0] === 'string' && headers[0].includes(',');
-
-      let csvFormat;
-
-      if (isCsvInExcel) {
-        console.log('⚠️ Detected CSV data pasted into first column of Excel - Process as raw CSV');
-        // If it's single column CSV data, just join lines without extra quoting
-        csvFormat = [
-          headers[0],
-          ...dataRows.map(row => row[0])
-        ].join('\n');
-      } else {
-        // Standard Excel with multiple columns
-        csvFormat = [
-          headers.map(h => `"${(h || '').toString().replace(/"/g, '""')}"`).join(','),
-          ...dataRows.map(row => row.map(cell => `"${(cell || '').toString().replace(/"/g, '""')}"`).join(','))
-        ].join('\n');
-      }
+      const csvFormat = [
+        headers.join(','),
+        ...dataRows.map(row => row.map(cell => `"${cell || ''}"`).join(','))
+      ].join('\n');
 
       fileContent = csvFormat;
 
@@ -444,7 +429,7 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
   // Validate leads based on actual data quality, not processing method
   const validLeads = allLeads.filter(lead => {
     // A lead is valid if it has at least a name or email
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && lead.Deal_Name !== '-';
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
     const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
     const hasPhone = lead.Phone && lead.Phone !== '';
 
@@ -452,7 +437,7 @@ async function processLargeFileInChunks(fileContent, fileType, lines) {
   });
 
   const invalidLeads = allLeads.filter(lead => {
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && lead.Deal_Name !== '-';
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
     const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
     const hasPhone = lead.Phone && lead.Phone !== '';
 
@@ -533,6 +518,10 @@ MAPPING FIELDS TO DETECT:
 - leadName: Main contact name (Lead_Name, Deal_Name, Contact_Name, Name, Nom, etc.)
 - firstName: First name (Prénom, FirstName, First, etc.)
 - lastName: Last name (Nom, LastName, Last, etc.)
+- address: Full address (Address, Adresse, Rue, etc.)
+- postalCode: Postal/Zip code (Postal_Code, Zip, Code_Postal, etc.)
+- city: City/Town (City, Ville, etc.)
+- dateOfBirth: Date of birth (Date_of_Birth, DOB, Date_de_Naissance, etc.)
 - stage: Status/Stage (Stage, Statut, Status, Étape, etc.)
 - pipeline: Pipeline/Source (Pipeline, Source, Canal, etc.)
 - projectTag: Tags/Categories (Project_Tag, Tag, Project, Category, etc.)
@@ -556,6 +545,10 @@ Return ONLY this JSON structure:
     "firstName": column_index_or_-1,
     "lastName": column_index_or_-1,
     "leadName": column_index_or_-1,
+    "address": column_index_or_-1,
+    "postalCode": column_index_or_-1,
+    "city": column_index_or_-1,
+    "dateOfBirth": column_index_or_-1,
     "accountName": column_index_or_-1,
     "contactName": column_index_or_-1,
     "stage": column_index_or_-1,
@@ -690,7 +683,11 @@ function createBasicMapping(headerLine) {
     pipeline: -1,
     projectTag: -1,
     amount: -1,
-    probability: -1
+    probability: -1,
+    address: -1,
+    postalCode: -1,
+    city: -1,
+    dateOfBirth: -1
   };
 
   // Recherche par nom de colonne
@@ -708,6 +705,14 @@ function createBasicMapping(headerLine) {
       mapping.stage = i;
     } else if (col.includes('pipeline') && mapping.pipeline === -1) {
       mapping.pipeline = i;
+    } else if ((col.includes('adresse') || col.includes('address')) && mapping.address === -1) {
+      mapping.address = i;
+    } else if ((col.includes('postal') || col.includes('zip') || col.includes('code_postal')) && mapping.postalCode === -1) {
+      mapping.postalCode = i;
+    } else if ((col.includes('ville') || col.includes('city')) && mapping.city === -1) {
+      mapping.city = i;
+    } else if ((col.includes('naissance') || col.includes('birth') || col.includes('date_de_naissance') || col.includes('dob')) && mapping.dateOfBirth === -1) {
+      mapping.dateOfBirth = i;
     }
   }
 
@@ -783,6 +788,10 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
     const projectTag = columnMapping.projectTag >= 0 ? columns[columnMapping.projectTag] || '' : '';
     const amount = columnMapping.amount >= 0 ? columns[columnMapping.amount] || '' : '';
     const probability = columnMapping.probability >= 0 ? columns[columnMapping.probability] || '' : '';
+    const address = columnMapping.address >= 0 ? columns[columnMapping.address] || '' : '';
+    const postalCode = columnMapping.postalCode >= 0 ? columns[columnMapping.postalCode] || '' : '';
+    const city = columnMapping.city >= 0 ? columns[columnMapping.city] || '' : '';
+    const dateOfBirth = columnMapping.dateOfBirth >= 0 ? columns[columnMapping.dateOfBirth] || '' : '';
 
     // Debug pour les premières lignes
     if (rowIndex <= 3) {
@@ -824,7 +833,7 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
     }
     // Dernier recours
     else {
-      finalDealName = '-';
+      finalDealName = `Lead from row ${rowIndex + 1}`;
     }
 
     if (rowIndex <= 3) {
@@ -867,7 +876,13 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
       Account_Name: accountName,
       Contact_Name: contactName,
       Amount: amount,
-      Probability: probability
+      Probability: probability,
+      Address: address,
+      Postal_Code: postalCode,
+      City: city,
+      Date_of_Birth: dateOfBirth,
+      First_Name: firstName,
+      Last_Name: lastName
     };
 
     return lead;
@@ -1013,7 +1028,7 @@ function validateLeadsOptimized(allLeads) {
 
   // Single pass validation for better performance
   for (const lead of allLeads) {
-    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && lead.Deal_Name !== '-';
+    const hasName = lead.Deal_Name && lead.Deal_Name !== '' && !lead.Deal_Name.startsWith('Lead from row');
     const hasEmail = lead.Email_1 && lead.Email_1 !== '' && lead.Email_1 !== 'no-email@placeholder.com';
     const hasPhone = lead.Phone && lead.Phone !== '';
 

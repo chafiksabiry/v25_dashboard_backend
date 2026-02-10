@@ -463,7 +463,7 @@ const getLeads = async (req, res) => {
 
         // Ajouter les leads de la page courante au tableau
         allLeads = allLeads.concat(response.data.data);
-        
+
         // Vérification de la présence des informations de pagination
         if (!response.data.info) {
           console.error("Informations de pagination manquantes:", response.data);
@@ -572,9 +572,9 @@ const saveLeads = async (req, res) => {
     // Filtrer les leads null (ceux qui n'ont pas pu être sauvegardés)
     const successfulLeads = savedLeads.filter(lead => lead !== null);
     console.log("Leads sauvegardés:", successfulLeads.length);
-    
-    res.status(201).json({ 
-      success: true, 
+
+    res.status(201).json({
+      success: true,
       data: successfulLeads,
       total: leads.length,
       saved: successfulLeads.length,
@@ -582,10 +582,10 @@ const saveLeads = async (req, res) => {
     });
   } catch (error) {
     console.error("Erreur lors de la sauvegarde des leads:", error);
-    res.status(500).json({ 
-      success: false, 
+    res.status(500).json({
+      success: false,
       message: "Erreur lors de la sauvegarde des leads",
-      error: error.message 
+      error: error.message
     });
   }
 };
@@ -1014,12 +1014,12 @@ const updateLead = async (req, res) => {
             updatedAt: new Date()
           }
         },
-        { 
+        {
           new: true,
           upsert: true // Créer le document s'il n'existe pas
         }
       );
-      
+
       if (updatedLead) {
         console.log(`Lead ${leadData.id} traité avec succès. ID Zoho: ${updatedLead.id}`);
         return updatedLead;
@@ -1316,7 +1316,7 @@ const disconnect = async (req, res) => {
     }
 
     const token = authHeader.split(' ')[1];
-    const [gigId, userId] = token.split(':');  
+    const [gigId, userId] = token.split(':');
     if (!userId) {
       return res.status(401).json({
         success: false,
@@ -1564,7 +1564,7 @@ const archiveEmail = async (req, res) => {
 
 const syncAllLeads = async (req, res) => {
   console.log("=== DÉBUT DE LA SYNCHRONISATION DES LEADS ===");
-  
+
   // Définir un timeout pour la réponse
   res.setTimeout(300000); // 5 minutes timeout
 
@@ -1598,10 +1598,10 @@ const syncAllLeads = async (req, res) => {
 
       while (hasMoreRecords) {
         console.log(`\nTraitement de la page ${currentPage}...`);
-        
+
         const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
         const params = {
-          fields: "Deal_Name,Stage,Pipeline,Email_1,Phone,Last_Activity_Time,Activity_Tag",
+          fields: "Deal_Name,First_Name,Last_Name,Stage,Pipeline,Email_1,Phone,Address,Postal_Code,City,Date_of_Birth,Last_Activity_Time,Activity_Tag",
           page: currentPage,
           per_page: pageSize
         };
@@ -1612,13 +1612,13 @@ const syncAllLeads = async (req, res) => {
             Authorization: `Zoho-oauthtoken ${accessToken}`,
             "Content-Type": "application/json",
           },
-          timeout: 3000000 // 30 secondes timeout pour chaque requête
+          timeout: 30000 // 30 secondes timeout pour chaque requête
         });
 
         if (response.data.data && Array.isArray(response.data.data)) {
           const leadsInPage = response.data.data.length;
           console.log(`Leads récupérés dans cette page: ${leadsInPage}`);
-          
+
           // Traiter les leads par lots de 20 pour éviter la surcharge
           const batchSize = 20;
           for (let i = 0; i < leadsInPage; i += batchSize) {
@@ -1630,6 +1630,12 @@ const syncAllLeads = async (req, res) => {
                   gigId: gigId,
                   companyId: req.body?.companyId,
                   Deal_Name: lead.Deal_Name,
+                  First_Name: lead.First_Name || '',
+                  Last_Name: lead.Last_Name || '',
+                  Address: lead.Address || '',
+                  Postal_Code: lead.Postal_Code || '',
+                  City: lead.City || '',
+                  Date_of_Birth: lead.Date_of_Birth || '',
                   Stage: lead.Stage,
                   Phone: lead.Phone,
                   Pipeline: lead.Pipeline,
@@ -1652,7 +1658,7 @@ const syncAllLeads = async (req, res) => {
                 // Créer un nouveau lead sans vérifier l'existence
                 const newLead = new LeadModel.Lead(leadData);
                 const savedLead = await newLead.save();
-                
+
                 // Vérification simple après sauvegarde
                 const verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
 
@@ -1696,7 +1702,7 @@ const syncAllLeads = async (req, res) => {
 
           totalRecords = response.data.info.count;
           hasMoreRecords = response.data.info.more_records;
-          
+
           console.log("Statut actuel:", {
             totalSaved,
             totalFailed,
@@ -1739,7 +1745,7 @@ const syncAllLeads = async (req, res) => {
       stack: error.stack,
       response: error.response?.data
     });
-    
+
     if (error.message === "Configuration_Required") {
       return res.status(401).json({
         success: false,
@@ -1768,12 +1774,12 @@ const getZohoConfigById = async (req, res) => {
   try {
     const { id } = req.params;
     const { companyId } = req.query;
-    
+
     console.log("userId reçu:", id);
     console.log("companyId reçu:", companyId);
     console.log("Type de userId:", typeof id);
     console.log("Longueur de userId:", id.length);
-    
+
     // Vérifier si l'ID est un ObjectId valide
     if (!mongoose.Types.ObjectId.isValid(id)) {
       console.log("userId invalide détecté");
@@ -1802,7 +1808,7 @@ const getZohoConfigById = async (req, res) => {
     // Rechercher la configuration par userId et companyId
     const config = await ZohoConfig.findOne({ userId: id, companyId }).sort({ lastUpdated: -1 });
     console.log("Configuration trouvée:", config ? "Oui" : "Non");
-    
+
     if (!config) {
       return res.status(404).json({
         success: false,
@@ -1839,12 +1845,12 @@ const getZohoConfigById = async (req, res) => {
 const getAllZohoConfigs = async (req, res) => {
   try {
     const { companyId } = req.query;
-    
+
     // Construire la requête en fonction de la présence de companyId
     const query = companyId ? { companyId } : {};
-    
+
     const configs = await ZohoConfig.find(query).sort({ lastUpdated: -1 });
-    
+
     // Ne pas renvoyer les informations sensibles
     const safeConfigs = configs.map(config => ({
       id: config._id,
