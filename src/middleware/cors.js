@@ -3,28 +3,33 @@ const cors = require('cors');
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = [
-      'https://v25.harx.ai', 
-      'https://api-dashboard.harx.ai', 
+      'https://v25.harx.ai',
+      'https://api-dashboard.harx.ai',
       'https://v25-preprod.harx.ai',
       'https://preprod-api-dashboard.harx.ai',
       'https://preprod-comp-orchestrator.harx.ai',
       'https://comp-orchestrator.harx.ai',
-      'http://localhost:5183', 
-      'http://localhost:3000', 
-      'http://localhost:5173', 
-      'http://localhost:3001'
+      'http://localhost:5183',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://localhost:3001',
+      'https://harx25pageslinks.netlify.app',
+      'https://harxv25dashboardfrontend.netlify.app',
+      'https://harxv25dashboardfrontend.netlify.app',
+      'https://harxv25comporchestratorfront.netlify.app'
     ];
-    
+
     // Permettre les requêtes sans origine (comme les requêtes de test)
     if (!origin) return callback(null, true);
-    
+
+
     // Check if origin is in allowed list
     if (allowedOrigins.indexOf(origin) !== -1) {
       callback(null, true);
     } else {
-      // Also allow any subdomain of harx.ai for development/preprod
-      if (origin && origin.endsWith('.harx.ai')) {
-        console.log('CORS allowing harx.ai subdomain:', origin);
+      // Also allow any subdomain of harx.ai or netlify.app for development/preprod
+      if (origin && (origin.endsWith('.harx.ai') || origin.endsWith('.netlify.app'))) {
+        console.log('CORS allowing subdomain:', origin);
         callback(null, true);
       } else {
         console.log('CORS blocked origin:', origin);
