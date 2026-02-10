@@ -699,7 +699,7 @@ function createBasicMapping(headerLine) {
       console.log(`🎯 Found Deal_Name at column ${i}`);
     } else if (col.includes('email') && mapping.email === -1) {
       mapping.email = i;
-    } else if (col.includes('phone') && mapping.phone === -1) {
+    } else if ((col.includes('phone') || col.includes('mobile') || col.includes('tel')) && mapping.phone === -1) {
       mapping.phone = i;
     } else if (col.includes('stage') && mapping.stage === -1) {
       mapping.stage = i;
@@ -718,6 +718,28 @@ function createBasicMapping(headerLine) {
 
   console.log('🎯 Basic fallback mapping:', mapping);
   return mapping;
+}
+
+/**
+ * Helper to format Excel date serial numbers or strings to DD/MM/YYYY
+ */
+function formatExcelDate(dateValue) {
+  if (!dateValue) return '';
+
+  // Handle Excel serial number (e.g., 26707)
+  // Excel base date is roughly Dec 30, 1899 to account for leap year bug in 1900
+  if (!isNaN(dateValue) && Number(dateValue) > 1000) {
+    const excelEpoch = new Date(1899, 11, 30);
+    const totalDays = Number(dateValue);
+    const date = new Date(excelEpoch.getTime() + totalDays * 24 * 60 * 60 * 1000);
+
+    const day = String(date.getDate()).padStart(2, '0');
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const year = date.getFullYear();
+    return `${day}/${month}/${year}`;
+  }
+
+  return dateValue;
 }
 
 
@@ -791,7 +813,10 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
     const address = columnMapping.address >= 0 ? columns[columnMapping.address] || '' : '';
     const postalCode = columnMapping.postalCode >= 0 ? columns[columnMapping.postalCode] || '' : '';
     const city = columnMapping.city >= 0 ? columns[columnMapping.city] || '' : '';
-    const dateOfBirth = columnMapping.dateOfBirth >= 0 ? columns[columnMapping.dateOfBirth] || '' : '';
+
+    // Gestion spéciale pour la date de naissance (conversion format Excel si nécessaire)
+    const rawDob = columnMapping.dateOfBirth >= 0 ? columns[columnMapping.dateOfBirth] || '' : '';
+    const dateOfBirth = formatExcelDate(rawDob);
 
     // Debug pour les premières lignes
     if (rowIndex <= 3) {
