@@ -711,8 +711,14 @@ function createBasicMapping(headerLine) {
       mapping.postalCode = i;
     } else if ((col.includes('ville') || col.includes('city')) && mapping.city === -1) {
       mapping.city = i;
+    } else if ((col.includes('ville') || col.includes('city')) && mapping.city === -1) {
+      mapping.city = i;
     } else if ((col.includes('naissance') || col.includes('birth') || col.includes('date_de_naissance') || col.includes('dob')) && mapping.dateOfBirth === -1) {
       mapping.dateOfBirth = i;
+    } else if ((col.includes('prenom') || col.includes('first_name') || col.includes('firstname')) && mapping.firstName === -1) {
+      mapping.firstName = i;
+    } else if ((col.includes('nom') || col.includes('last_name') || col.includes('lastname') || col.includes('surname')) && mapping.lastName === -1 && !col.includes('prenom')) {
+      mapping.lastName = i;
     }
   }
 
@@ -904,7 +910,8 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
       Probability: probability,
       Address: address,
       Postal_Code: postalCode,
-      City: city,
+      // User request: "au lieu de city faire 'Adresse'" (Use Address value for City field)
+      City: address || city,
       Date_of_Birth: dateOfBirth,
       First_Name: firstName,
       Last_Name: lastName
