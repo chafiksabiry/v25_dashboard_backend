@@ -327,12 +327,19 @@ exports.getLeadsByPipelineAndStage = async (req, res) => {
 // @desc    Get leads by gig ID
 // @route   GET /api/leads/gig/:gigId
 // @access  Private
+// @desc    Get leads by gig ID
+// @route   GET /api/leads/gig/:gigId
+// @access  Private
 exports.getLeadsByGigId = async (req, res) => {
   try {
-    const { gigId } = req.params;
+    let { gigId } = req.params;
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
+
+    console.log("----------------------------------------------------");
+    console.log("🚀 getLeadsByGigId REQUEST RECEIVED");
+    console.log(`📥 Raw gigId from params: '${gigId}'`);
 
     if (!gigId) {
       return res.status(400).json({
@@ -341,19 +348,32 @@ exports.getLeadsByGigId = async (req, res) => {
       });
     }
 
+    // Clean whitespace
+    gigId = gigId.trim();
+
     // Validate if gigId is a valid MongoDB ObjectId
     if (!mongoose.Types.ObjectId.isValid(gigId)) {
+      console.log(`❌ Invalid gigId format: '${gigId}'`);
       return res.status(400).json({
         success: false,
         error: "Invalid gig ID format"
       });
     }
 
+    // Explicitly cast to ObjectId for the query
+    const queryGigId = new mongoose.Types.ObjectId(gigId);
+    console.log(`🔍 Querying MongoDB with gigId (ObjectId): ${queryGigId}`);
+
+    // LOG THE QUERY before executing
+    const query = { gigId: queryGigId };
+    console.log("🛠️  Full Query Object:", JSON.stringify(query));
+
     // Get total count for pagination
-    const total = await Lead.countDocuments({ gigId });
+    const total = await Lead.countDocuments(query);
+    console.log(`📊 Found ${total} matching documents in 'leads' collection`);
 
     // Get paginated leads
-    const leads = await Lead.find({ gigId })
+    const leads = await Lead.find(query)
       .populate({
         path: 'assignedTo',
         select: 'name email',
@@ -362,6 +382,9 @@ exports.getLeadsByGigId = async (req, res) => {
       .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
       .skip(skip)
       .limit(limit);
+
+    console.log(`📤 Returning ${leads.length} leads in response`);
+    console.log("----------------------------------------------------");
 
     res.status(200).json({
       success: true,
@@ -372,7 +395,7 @@ exports.getLeadsByGigId = async (req, res) => {
       data: leads
     });
   } catch (err) {
-    console.error('Error in getLeadsByGigId:', err);
+    console.error('❌ Error in getLeadsByGigId:', err);
     res.status(400).json({
       success: false,
       error: err.message
