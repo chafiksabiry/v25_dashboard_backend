@@ -129,6 +129,59 @@ exports.createLead = async (req, res) => {
   }
 };
 
+// @desc    Create multiple leads at once
+// @route   POST /api/leads/bulk
+// @access  Private
+exports.createLeadsBulk = async (req, res) => {
+  try {
+    const { leads, gigId } = req.body;
+
+    if (!leads || !Array.isArray(leads) || leads.length === 0) {
+      return res.status(400).json({
+        success: false,
+        message: "No leads provided or invalid format"
+      });
+    }
+
+    console.log(`📝 Processing bulk creation of ${leads.length} leads`);
+
+    // Add gigId and userId to each lead if not present
+    const leadsToCreate = leads.map(lead => ({
+      ...lead,
+      gigId: lead.gigId || gigId || (req.gig ? req.gig._id : undefined),
+      userId: lead.userId || (req.user ? req.user._id : undefined)
+    }));
+
+    // Use insertMany for better performance
+    const createdLeads = await Lead.insertMany(leadsToCreate, { ordered: false });
+
+    console.log(`✅ Successfully created ${createdLeads.length} leads`);
+
+    res.status(201).json({
+      success: true,
+      count: createdLeads.length,
+      data: createdLeads
+    });
+  } catch (err) {
+    console.error('❌ Error in createLeadsBulk:', err);
+
+    // Handle partial success with ordered: false
+    if (err.code === 11000) { // Duplicate key error
+      return res.status(207).json({ // 207 Multi-Status
+        success: true,
+        message: "Some leads were created, but duplicates were skipped",
+        count: err.insertedDocs ? err.insertedDocs.length : 0,
+        data: err.insertedDocs || []
+      });
+    }
+
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
+
 // @desc    Update lead
 // @route   PUT /api/leads/:id
 // @access  Private
