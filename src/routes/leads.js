@@ -13,7 +13,7 @@ const {
   getLeadsByPipelineAndStage,
   getLeadsByGigId,
   searchLeadsByGigId,
-  searchLeadsByGigId,
+
   hasCompanyLeads,
   createLeadsBulk
 } = require("../controllers/leads");
