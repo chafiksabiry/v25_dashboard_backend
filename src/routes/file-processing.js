@@ -32,8 +32,8 @@ const upload = multer({
  */
 router.post('/process', upload.single('file'), async (req, res) => {
   // Set long timeout for file processing
-  req.setTimeout(300000); // 5 minutes
-  res.setTimeout(300000); // 5 minutes
+  req.setTimeout(30000); // 5 minutes
+  res.setTimeout(30000); // 5 minutes
 
   // Set headers to prevent proxy timeouts and improve frontend communication
   res.set({
@@ -817,8 +817,8 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
     const amount = columnMapping.amount >= 0 ? columns[columnMapping.amount] || '' : '';
     const probability = columnMapping.probability >= 0 ? columns[columnMapping.probability] || '' : '';
     const address = columnMapping.address >= 0 ? columns[columnMapping.address] || '' : '';
-    const postalCode = columnMapping.postalCode >= 0 ? columns[columnMapping.postalCode] || '' : '';
-    const city = columnMapping.city >= 0 ? columns[columnMapping.city] || '' : '';
+    const postalCode = columnMapping.postalCode >= 0 ? (columns[columnMapping.postalCode] || '-') : '-';
+    const city = columnMapping.city >= 0 ? (columns[columnMapping.city] || '-') : '-';
 
     // Gestion spéciale pour la date de naissance (conversion format Excel si nécessaire)
     const rawDob = columnMapping.dateOfBirth >= 0 ? columns[columnMapping.dateOfBirth] || '' : '';
@@ -910,8 +910,7 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
       Probability: probability,
       Address: address,
       Postal_Code: postalCode,
-      // User request: "au lieu de city faire 'Adresse'" (Use Address value for City field)
-      City: address || city,
+      City: city,
       Date_of_Birth: dateOfBirth,
       First_Name: firstName,
       Last_Name: lastName

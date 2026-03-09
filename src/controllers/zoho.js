@@ -1566,7 +1566,7 @@ const syncAllLeads = async (req, res) => {
   console.log("=== DÉBUT DE LA SYNCHRONISATION DES LEADS ===");
 
   // Définir un timeout pour la réponse
-  res.setTimeout(300000); // 5 minutes timeout
+  res.setTimeout(30000); // 5 minutes timeout
 
   // Vérifier et définir les valeurs par défaut
   const userId = req.body?.userId;
