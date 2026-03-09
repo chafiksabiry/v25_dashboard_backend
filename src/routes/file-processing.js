@@ -98,15 +98,11 @@ router.post('/process', upload.single('file'), async (req, res) => {
     } else if (fileExtension === 'csv') {
       fileType = 'CSV';
       fileContent = file.buffer.toString('utf8');
-    } else if (fileExtension === 'json') {
-      fileType = 'JSON';
-      fileContent = file.buffer.toString('utf8');
-    } else if (fileExtension === 'txt') {
-      fileType = 'Text';
-      fileContent = file.buffer.toString('utf8');
     } else {
-      fileType = 'Unknown';
-      fileContent = file.buffer.toString('utf8');
+      return res.status(400).json({
+        success: false,
+        error: `Unsupported file format: .${fileExtension}. Please upload a CSV, XLS, or XLSX file.`
+      });
     }
 
     // Nettoyer le contenu du fichier
