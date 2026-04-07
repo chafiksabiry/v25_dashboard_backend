@@ -183,7 +183,7 @@ router.get('/config/user/:userId', async (req, res) => {
     const { userId } = req.params;
     const config = await ZohoConfig.findOne({ userId });
     if (!config) {
-      return res.status(404).json({ error: 'Configuration not found for this user' });
+      return res.status(200).json(null);
     }
     res.json(config);
   } catch (error) {
