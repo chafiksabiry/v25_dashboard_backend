@@ -175,9 +175,6 @@ router.post('/emails/:id/archive', zohoTokenMiddleware, requireZohoConfig, archi
 router.get('/check-configuration', zohoTokenMiddleware, requireZohoConfig, checkConfiguration);
 router.get('/pipelines', zohoTokenMiddleware, requireZohoConfig, getPipelines);
 
-router.get('/config/:id', getZohoConfigById);
-router.get('/configs', getAllZohoConfigs);
-
 router.get('/config/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
@@ -190,6 +187,9 @@ router.get('/config/user/:userId', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
+
+router.get('/config/:id', getZohoConfigById);
+router.get('/configs', getAllZohoConfigs);
 
 router.post('/config/user/:userId/refresh-token', async (req, res) => {
   try {
