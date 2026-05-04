@@ -1,4 +1,7 @@
 const { Call } = require('../models/Call');
+const { Lead } = require('../models/Lead');
+const { Agent } = require('../models/Agent');
+const { Gig } = require('../models/Gig');
 /*
 // @desc    Get all calls
 // @route   GET /api/calls
