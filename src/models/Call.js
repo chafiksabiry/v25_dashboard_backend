@@ -56,6 +56,17 @@ const callSchema = new mongoose.Schema({
       feedback: { type: String }
     }
   },
+  gigId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "Gig",
+  },
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+  },
+  userId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: "User",
+  },
   createdAt: {
     type: Date,
     default: Date.now
