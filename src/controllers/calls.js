@@ -464,3 +464,35 @@ exports.initiateCall = async (req, res) => {
     });
   }
 };
+
+// @desc    Get gigs for a user (rep)
+// @route   GET /api/calls/gigs
+// @access  Private
+exports.getCallsGigs = async (req, res) => {
+  try {
+    const { userId } = req.query;
+
+    if (!userId) {
+      return res.status(400).json({
+        success: false,
+        error: 'Please provide user ID'
+      });
+    }
+
+    const leads = await Lead.find({ assignedTo: userId });
+    const gigIds = [...new Set(leads.map(l => l.gigId).filter(id => id))];
+    
+    const gigs = await Gig.find({ _id: { $in: gigIds } });
+
+    res.status(200).json({
+      success: true,
+      count: gigs.length,
+      data: gigs
+    });
+  } catch (err) {
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
