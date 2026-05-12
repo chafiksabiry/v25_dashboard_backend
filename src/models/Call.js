@@ -1,43 +1,78 @@
-const mongoose = require('mongoose');
+const mongoose = require("mongoose");
 require('./Transaction');
 
 const callSchema = new mongoose.Schema({
+  call_id: {
+    type: String,
+    sparse: true, // Permet d'avoir des documents sans ce champ tout en gardant l'index
+    index: true, // Index pour des recherches efficaces
+    description: "Identifiant unique de l'appel fourni par Qalqul",
+    required: function () {
+      return this.provider === 'qalqul';
+    }
+  },
   agent: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Agent',
-    required: true
+    ref: "Agent",
+    required: true,
   },
   lead: {
     type: mongoose.Schema.Types.ObjectId,
-    ref: 'Lead'
+    ref: "Lead",
   },
-  phone_number: {
+  sid: {
     type: String,
-    required: [true, 'Please add a phone number']
+    required: function () {
+      return this.provider === 'twilio';
+    },
+    unique: true, // Identifiant Twilio de l'appel
+  },
+  parentCallSid: {
+    type: String,
+    default: null, // SID de l'appel parent s'il y en a un
   },
   direction: {
     type: String,
-    enum: ['inbound', 'outbound'],
-    required: true
+    enum: ["inbound", "outbound", "outbound-dial", "outbound-api", "Inbound", "Outbound"],
+    default: "outbound",
+    required: true,
+  },
+  from: {
+    type: String,
+    default: null,
+  },
+  to: {
+    type: String,
+    default: null,
+  },
+  provider: {
+    type: String,
+    enum: ["twilio", "qalqul"],
+    //required: true,
+  },
+  startTime: {
+    type: Date, // Date et heure de début de l'appel
+    required: true,
+  },
+  endTime: {
+    type: Date, // Date et heure de fin de l'appel
+    default: null,
   },
   status: {
     type: String,
-    enum: ['active', 'completed', 'missed', 'failed'],
-    default: 'active'
+    //enum: ["active", "completed", "missed", "failed"],
+    default: null,
   },
   duration: {
     type: Number,
-    default: 0
+    default: 0,
   },
   recording_url: String,
-  notes: String,
-  tags: [{
-    type: String
-  }],
+  recording_url_cloudinary: String,
   quality_score: {
     type: Number,
     min: 0,
-    max: 100
+    max: 100,
   },
   ai_call_score: {
     "Agent fluency": {
@@ -57,6 +92,12 @@ const callSchema = new mongoose.Schema({
       feedback: { type: String }
     }
   },
+  transcript: [{
+    speaker: String,
+    text: String,
+    timestamp: String
+  }],
+  childCalls: [String], // Liste des appels enfants (SID)
   gigId: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Gig",
@@ -72,14 +113,40 @@ const callSchema = new mongoose.Schema({
     type: Boolean,
     default: null,
   },
+  validByCompany: {
+    type: Boolean,
+    default: null,
+  },
+  validByReps: {
+    type: Boolean,
+    default: null,
+  },
+  valid: {
+    type: Boolean,
+    default: null,
+  },
+  companyValidation: {
+    type: String,
+    enum: ["pending", "approved", "rejected"],
+    default: "pending",
+  },
+  agentValidation: {
+    type: String,
+    enum: ["pending", "approved", "rejected"],
+    default: "pending",
+  },
+  price: {
+    type: Number,
+    default: 0,
+  },
   createdAt: {
     type: Date,
-    default: Date.now
+    default: Date.now,
   },
   updatedAt: {
     type: Date,
-    default: Date.now
-  }
+    default: Date.now,
+  },
 }, {
   toJSON: { virtuals: true },
   toObject: { virtuals: true }
@@ -92,11 +159,11 @@ callSchema.virtual('transaction', {
   justOne: true
 });
 
-callSchema.pre('save', function (next) {
+callSchema.pre("save", function (next) {
   this.updatedAt = new Date();
   next();
 });
 
-const Call = mongoose.model('Call', callSchema);
+const Call = mongoose.model("Call", callSchema);
 
 module.exports = { Call };
