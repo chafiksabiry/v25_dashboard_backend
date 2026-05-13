@@ -46,7 +46,9 @@ const corsOptions = {
     'Accept',
     'Origin',
     'X-Requested-With',
-    'Cache-Control'
+    'Cache-Control',
+    'x-user-id',
+    'x-agent-id'
   ],
   exposedHeaders: ['Content-Length', 'X-Requested-With'],
   preflightContinue: false,
