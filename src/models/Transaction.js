@@ -26,7 +26,7 @@ const transactionSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     required: false,
   },
-  validByReps: {
+  validByAI: {
     type: Boolean,
     default: null,
   },
@@ -37,6 +37,14 @@ const transactionSchema = new mongoose.Schema({
   valid: {
     type: Boolean,
     default: null,
+  },
+  argumentation_score: {
+    type: Number,
+    default: 0,
+  },
+  transaction_score: {
+    type: Number,
+    default: 0,
   },
   createdAt: {
     type: Date,
@@ -50,7 +58,13 @@ const transactionSchema = new mongoose.Schema({
 
 transactionSchema.pre('save', function (next) {
   this.updatedAt = new Date();
-  this.valid = (this.validByReps === true && this.validByCompany === true);
+  if (this.validByAI === false || this.validByCompany === false) {
+    this.valid = false;
+  } else if (this.validByAI === true && this.validByCompany === true) {
+    this.valid = true;
+  } else {
+    this.valid = null;
+  }
   next();
 });
 
@@ -59,17 +73,29 @@ transactionSchema.pre('findOneAndUpdate', function (next) {
   if (update) {
     if (update.$set) {
       update.$set.updatedAt = new Date();
-      if (update.$set.validByReps !== undefined || update.$set.validByCompany !== undefined) {
-        const repsVal = update.$set.validByReps !== undefined ? update.$set.validByReps : null;
+      if (update.$set.validByAI !== undefined || update.$set.validByCompany !== undefined) {
+        const aiVal = update.$set.validByAI !== undefined ? update.$set.validByAI : null;
         const companyVal = update.$set.validByCompany !== undefined ? update.$set.validByCompany : null;
-        update.$set.valid = (repsVal === true && companyVal === true);
+        if (aiVal === false || companyVal === false) {
+          update.$set.valid = false;
+        } else if (aiVal === true && companyVal === true) {
+          update.$set.valid = true;
+        } else {
+          update.$set.valid = null;
+        }
       }
     } else {
       update.updatedAt = new Date();
-      if (update.validByReps !== undefined || update.validByCompany !== undefined) {
-        const repsVal = update.validByReps !== undefined ? update.validByReps : null;
+      if (update.validByAI !== undefined || update.validByCompany !== undefined) {
+        const aiVal = update.validByAI !== undefined ? update.validByAI : null;
         const companyVal = update.validByCompany !== undefined ? update.validByCompany : null;
-        update.valid = (repsVal === true && companyVal === true);
+        if (aiVal === false || companyVal === false) {
+          update.valid = false;
+        } else if (aiVal === true && companyVal === true) {
+          update.valid = true;
+        } else {
+          update.valid = null;
+        }
       }
     }
   }
