@@ -612,14 +612,16 @@ exports.getCompanyLeadStats = async (req, res) => {
     const leadFilter = buildCompanyLeadFilter(companyId, gigId);
     const total = await Lead.countDocuments(leadFilter);
 
-    // "Called" = distinct leads with at least one call, regardless of call status.
-    // We join calls → leads so only leads in the company/gig pool are counted.
+    // We compute both "called" and "contacted" in a single aggregation:
+    //   - called    = distinct leads with at least one call (any status)
+    //   - contacted = distinct leads with at least one *completed* call
+    //                 (i.e. the lead actually picked up / there was a response)
     const leadDocMatch = { "leadDoc.companyId": leadFilter.companyId };
     if (leadFilter.gigId) {
       leadDocMatch["leadDoc.gigId"] = leadFilter.gigId;
     }
 
-    const calledAgg = await Call.aggregate([
+    const agg = await Call.aggregate([
       {
         $match: {
           companyId: leadFilter.companyId,
@@ -636,18 +638,42 @@ exports.getCompanyLeadStats = async (req, res) => {
       },
       { $unwind: "$leadDoc" },
       { $match: leadDocMatch },
-      { $group: { _id: "$lead" } },
-      { $count: "called" }
+      {
+        $group: {
+          _id: "$lead",
+          // 1 if at least one call for this lead was completed.
+          contacted: {
+            $max: {
+              $cond: [
+                { $in: ["$status", ["completed", "Completed"]] },
+                1,
+                0
+              ]
+            }
+          }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          called: { $sum: 1 },
+          contacted: { $sum: "$contacted" }
+        }
+      }
     ]);
 
-    const called = calledAgg[0]?.called ?? 0;
-    const coveragePct = total > 0 ? Math.round((called / total) * 1000) / 10 : 0;
+    const called = agg[0]?.called ?? 0;
+    const contacted = agg[0]?.contacted ?? 0;
+    const coveragePct = total > 0 ? Math.round((called / total) * 10000) / 100 : 0;
+    const reachablePct = called > 0 ? Math.round((contacted / called) * 10000) / 100 : 0;
 
     res.status(200).json({
       success: true,
       total,
       called,
+      contacted,
       coveragePct,
+      reachablePct,
       gigId: gigId && gigId !== "all" ? gigId : null
     });
   } catch (err) {
