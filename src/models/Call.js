@@ -53,14 +53,16 @@ const callSchema = new mongoose.Schema({
   recording_url: String,
   recording_url_cloudinary: String,
   quality_score: { type: Number, min: 0, max: 100 },
+  // SEE v25_dash_calls_backend/src/models/Call.js for rubric semantics.
   ai_call_score: {
-    "Agent fluency":        { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
-    "Sentiment analysis":   { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
-    "Fraud detection":      { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
-    "Script coherence":     { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
-    "Argumentation":        { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
-    "Transaction analysis": { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
-    "overall":              { score: { type: Number, min: 0, max: 100 }, feedback: { type: String } },
+    "Agent fluency":        { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "Sentiment analysis":   { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "Fraud detection":      { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "Script coherence":     { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "Argumentation":        { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "Script adherence":     { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "Transaction analysis": { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
+    "overall":              { score: { type: Number, min: 0, max: 100 }, feedback: { type: String }, passed: { type: Boolean, default: false } },
     "transaction_detected": { type: Boolean, default: false },
     "refusal_detected":     { type: Boolean, default: false }
   },
