@@ -641,6 +641,7 @@ exports.getCompanyLeadStats = async (req, res) => {
       {
         $group: {
           _id: "$lead",
+          attempts: { $sum: 1 },
           // 1 if at least one call for this lead was completed.
           contacted: {
             $max: {
@@ -657,21 +658,39 @@ exports.getCompanyLeadStats = async (req, res) => {
         $group: {
           _id: null,
           called: { $sum: 1 },
-          contacted: { $sum: "$contacted" }
+          contacted: { $sum: "$contacted" },
+          // "Exhausted" = >5 attempts and never contacted. These are the
+          // leads we keep dialling without ever getting through, so they
+          // should be retired from the active queue.
+          exhausted: {
+            $sum: {
+              $cond: [
+                { $and: [{ $gt: ["$attempts", 5] }, { $eq: ["$contacted", 0] }] },
+                1,
+                0
+              ]
+            }
+          },
+          totalAttempts: { $sum: "$attempts" }
         }
       }
     ]);
 
     const called = agg[0]?.called ?? 0;
     const contacted = agg[0]?.contacted ?? 0;
+    const exhausted = agg[0]?.exhausted ?? 0;
+    const totalAttempts = agg[0]?.totalAttempts ?? 0;
     const coveragePct = total > 0 ? Math.round((called / total) * 10000) / 100 : 0;
     const reachablePct = called > 0 ? Math.round((contacted / called) * 10000) / 100 : 0;
+    const avgAttempts = called > 0 ? Math.round((totalAttempts / called) * 10) / 10 : 0;
 
     res.status(200).json({
       success: true,
       total,
       called,
       contacted,
+      exhausted,
+      avgAttempts,
       coveragePct,
       reachablePct,
       gigId: gigId && gigId !== "all" ? gigId : null
