@@ -684,6 +684,175 @@ exports.getCompanyLeadStats = async (req, res) => {
     const reachablePct = called > 0 ? Math.round((contacted / called) * 10000) / 100 : 0;
     const avgAttempts = called > 0 ? Math.round((totalAttempts / called) * 10) / 10 : 0;
 
+    // -------------------- Base quality breakdown --------------------
+    // Classify every lead in the company/gig pool into exactly one bucket
+    // so the percentages always sum to 100%. Order of the switch matters:
+    // we pick the *most specific* signal first.
+    //
+    //   wrong          → phone returned a "failed/invalid number" signal
+    //   alreadyInsured → AI refusal reason mentions an existing policy
+    //   notAware       → AI refusal reason mentions ignorance of product
+    //   notInterested  → AI flagged a refusal (catch-all for refusals)
+    //   unreachable    → called but never reached a human
+    //   valid          → reached a human OR never called yet (default)
+    //
+    // We deliberately classify *uncalled* leads as "valid" because we have
+    // no negative signal on them — they remain candidates for the queue.
+    const qualityAgg = await Lead.aggregate([
+      { $match: leadFilter },
+      {
+        $lookup: {
+          from: "calls",
+          localField: "_id",
+          foreignField: "lead",
+          as: "calls"
+        }
+      },
+      {
+        $project: {
+          hasCalls: { $gt: [{ $size: "$calls" }, 0] },
+          anyCompleted: {
+            $anyElementTrue: {
+              $map: {
+                input: "$calls",
+                as: "c",
+                in: { $in: ["$$c.status", ["completed", "Completed"]] }
+              }
+            }
+          },
+          allInvalidPhone: {
+            $cond: [
+              { $eq: [{ $size: "$calls" }, 0] },
+              false,
+              {
+                $allElementsTrue: {
+                  $map: {
+                    input: "$calls",
+                    as: "c",
+                    in: {
+                      $in: [
+                        { $toLower: { $ifNull: ["$$c.status", ""] } },
+                        ["failed", "invalid", "no-route"]
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          // Concatenate every refusal reason so a single regex pass covers
+          // all the calls a given lead has accumulated.
+          refusalReasons: {
+            $reduce: {
+              input: "$calls",
+              initialValue: "",
+              in: {
+                $concat: [
+                  "$$value",
+                  " ",
+                  { $ifNull: ["$$this.ai_refusal_reason", ""] }
+                ]
+              }
+            }
+          },
+          anyRefusalFlag: {
+            $anyElementTrue: {
+              $map: {
+                input: "$calls",
+                as: "c",
+                in: { $eq: ["$$c.ai_call_score.refusal_detected", true] }
+              }
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          category: {
+            $switch: {
+              branches: [
+                {
+                  case: {
+                    $regexMatch: {
+                      input: "$refusalReasons",
+                      regex: "déjà.*assur|already.*insur|assur.*déjà",
+                      options: "i"
+                    }
+                  },
+                  then: "alreadyInsured"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: "$refusalReasons",
+                      regex: "pas au courant|unaware|didn'?t know|connaiss|jamais entendu|never heard",
+                      options: "i"
+                    }
+                  },
+                  then: "notAware"
+                },
+                {
+                  case: { $eq: ["$allInvalidPhone", true] },
+                  then: "wrong"
+                },
+                {
+                  case: { $eq: ["$anyRefusalFlag", true] },
+                  then: "notInterested"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: "$refusalReasons",
+                      regex: "pas intéress|not interested|refus",
+                      options: "i"
+                    }
+                  },
+                  then: "notInterested"
+                },
+                {
+                  case: {
+                    $and: [
+                      { $eq: ["$hasCalls", true] },
+                      { $eq: ["$anyCompleted", false] }
+                    ]
+                  },
+                  then: "unreachable"
+                }
+              ],
+              default: "valid"
+            }
+          }
+        }
+      },
+      { $group: { _id: "$category", count: { $sum: 1 } } }
+    ]);
+
+    const qualityBuckets = {
+      valid: 0,
+      unreachable: 0,
+      wrong: 0,
+      notInterested: 0,
+      notAware: 0,
+      alreadyInsured: 0
+    };
+    for (const row of qualityAgg) {
+      if (row._id && qualityBuckets.hasOwnProperty(row._id)) {
+        qualityBuckets[row._id] = row.count;
+      }
+    }
+
+    const pct = (n) => (total > 0 ? Math.round((n / total) * 10000) / 100 : 0);
+    const quality = {
+      valid: { count: qualityBuckets.valid, pct: pct(qualityBuckets.valid) },
+      unreachable: { count: qualityBuckets.unreachable, pct: pct(qualityBuckets.unreachable) },
+      wrong: { count: qualityBuckets.wrong, pct: pct(qualityBuckets.wrong) },
+      notInterested: { count: qualityBuckets.notInterested, pct: pct(qualityBuckets.notInterested) },
+      notAware: { count: qualityBuckets.notAware, pct: pct(qualityBuckets.notAware) },
+      alreadyInsured: { count: qualityBuckets.alreadyInsured, pct: pct(qualityBuckets.alreadyInsured) }
+    };
+    // Base quality score = share of leads we can still legitimately call.
+    const qualityScorePct = quality.valid.pct;
+
     res.status(200).json({
       success: true,
       total,
@@ -693,6 +862,8 @@ exports.getCompanyLeadStats = async (req, res) => {
       avgAttempts,
       coveragePct,
       reachablePct,
+      quality,
+      qualityScorePct,
       gigId: gigId && gigId !== "all" ? gigId : null
     });
   } catch (err) {
