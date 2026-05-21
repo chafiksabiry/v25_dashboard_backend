@@ -1,5 +1,15 @@
 const { Lead } = require("../models/Lead");
+const { Call } = require("../models/Call");
 const mongoose = require("mongoose");
+
+/** Build the Mongo filter for leads belonging to a company (optional gig). */
+function buildCompanyLeadFilter(companyId, gigId) {
+  const filter = { companyId: new mongoose.Types.ObjectId(companyId) };
+  if (gigId && gigId !== "all" && mongoose.Types.ObjectId.isValid(gigId)) {
+    filter.gigId = new mongoose.Types.ObjectId(gigId);
+  }
+  return filter;
+}
 
 // @desc    Get all leads
 // @route   GET /api/leads
@@ -552,8 +562,8 @@ exports.hasCompanyLeads = async (req, res) => {
       });
     }
 
-    // Check if there are any leads for this company
-    const count = await Lead.countDocuments({ companyId });
+    const filter = buildCompanyLeadFilter(companyId, req.query.gigId);
+    const count = await Lead.countDocuments(filter);
 
     res.status(200).json({
       success: true,
@@ -562,6 +572,86 @@ exports.hasCompanyLeads = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in hasCompanyLeads:', err);
+    res.status(400).json({
+      success: false,
+      error: err.message
+    });
+  }
+};
+
+// @desc    Lead stats for company dashboard (total + called ≥1x, any call status)
+// @route   GET /api/leads/company/:companyId/stats
+// @access  Private
+// @query   gigId — optional; omit or "all" for whole company
+exports.getCompanyLeadStats = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { gigId } = req.query;
+
+    if (!companyId) {
+      return res.status(400).json({
+        success: false,
+        message: "Company ID is required"
+      });
+    }
+
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid company ID format"
+      });
+    }
+
+    if (gigId && gigId !== "all" && !mongoose.Types.ObjectId.isValid(gigId)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid gig ID format"
+      });
+    }
+
+    const leadFilter = buildCompanyLeadFilter(companyId, gigId);
+    const total = await Lead.countDocuments(leadFilter);
+
+    // "Called" = distinct leads with at least one call, regardless of call status.
+    // We join calls → leads so only leads in the company/gig pool are counted.
+    const leadDocMatch = { "leadDoc.companyId": leadFilter.companyId };
+    if (leadFilter.gigId) {
+      leadDocMatch["leadDoc.gigId"] = leadFilter.gigId;
+    }
+
+    const calledAgg = await Call.aggregate([
+      {
+        $match: {
+          companyId: leadFilter.companyId,
+          lead: { $exists: true, $ne: null }
+        }
+      },
+      {
+        $lookup: {
+          from: "leads",
+          localField: "lead",
+          foreignField: "_id",
+          as: "leadDoc"
+        }
+      },
+      { $unwind: "$leadDoc" },
+      { $match: leadDocMatch },
+      { $group: { _id: "$lead" } },
+      { $count: "called" }
+    ]);
+
+    const called = calledAgg[0]?.called ?? 0;
+    const coveragePct = total > 0 ? Math.round((called / total) * 1000) / 10 : 0;
+
+    res.status(200).json({
+      success: true,
+      total,
+      called,
+      coveragePct,
+      gigId: gigId && gigId !== "all" ? gigId : null
+    });
+  } catch (err) {
+    console.error("Error in getCompanyLeadStats:", err);
     res.status(400).json({
       success: false,
       error: err.message

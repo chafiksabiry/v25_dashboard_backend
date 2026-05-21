@@ -15,6 +15,7 @@ const {
   searchLeadsByGigId,
 
   hasCompanyLeads,
+  getCompanyLeadStats,
   createLeadsBulk
 } = require("../controllers/leads");
 
@@ -115,6 +116,7 @@ router.route("/filter").get(getLeadsByPipelineAndStage);
 router.route("/gig/:gigId").get(getLeadsByGigId);
 router.route("/gig/:gigId/search").get(searchLeadsByGigId);
 router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
+router.route("/company/:companyId/stats").get(getCompanyLeadStats);
 
 
 
