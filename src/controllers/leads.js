@@ -671,7 +671,15 @@ exports.getCompanyLeadStats = async (req, res) => {
               ]
             }
           },
-          totalAttempts: { $sum: "$attempts" }
+          totalAttempts: { $sum: "$attempts" },
+          // Attempt-count histogram: how many distinct leads have exactly
+          // 1, 2, 3, 4 or ≥5 calls. Drives the "Distribution tentatives"
+          // panel in the Leads view.
+          one: { $sum: { $cond: [{ $eq: ["$attempts", 1] }, 1, 0] } },
+          two: { $sum: { $cond: [{ $eq: ["$attempts", 2] }, 1, 0] } },
+          three: { $sum: { $cond: [{ $eq: ["$attempts", 3] }, 1, 0] } },
+          four: { $sum: { $cond: [{ $eq: ["$attempts", 4] }, 1, 0] } },
+          fivePlus: { $sum: { $cond: [{ $gte: ["$attempts", 5] }, 1, 0] } }
         }
       }
     ]);
@@ -683,6 +691,17 @@ exports.getCompanyLeadStats = async (req, res) => {
     const coveragePct = total > 0 ? Math.round((called / total) * 10000) / 100 : 0;
     const reachablePct = called > 0 ? Math.round((contacted / called) * 10000) / 100 : 0;
     const avgAttempts = called > 0 ? Math.round((totalAttempts / called) * 10) / 10 : 0;
+
+    // Attempt distribution — percentages computed against the *called* pool
+    // so they sum to 100%. The "Distribution tentatives" panel uses this.
+    const pctOfCalled = (n) => (called > 0 ? Math.round((n / called) * 10000) / 100 : 0);
+    const attemptDistribution = {
+      one:      { count: agg[0]?.one      ?? 0, pct: pctOfCalled(agg[0]?.one      ?? 0) },
+      two:      { count: agg[0]?.two      ?? 0, pct: pctOfCalled(agg[0]?.two      ?? 0) },
+      three:    { count: agg[0]?.three    ?? 0, pct: pctOfCalled(agg[0]?.three    ?? 0) },
+      four:     { count: agg[0]?.four     ?? 0, pct: pctOfCalled(agg[0]?.four     ?? 0) },
+      fivePlus: { count: agg[0]?.fivePlus ?? 0, pct: pctOfCalled(agg[0]?.fivePlus ?? 0) }
+    };
 
     // -------------------- Base quality breakdown --------------------
     // Classify every lead in the company/gig pool into exactly one bucket
@@ -864,6 +883,7 @@ exports.getCompanyLeadStats = async (req, res) => {
       reachablePct,
       quality,
       qualityScorePct,
+      attemptDistribution,
       gigId: gigId && gigId !== "all" ? gigId : null
     });
   } catch (err) {
