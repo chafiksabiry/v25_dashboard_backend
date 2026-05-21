@@ -16,6 +16,7 @@ const {
 
   hasCompanyLeads,
   getCompanyLeadStats,
+  getCompanyRepCoverage,
   createLeadsBulk
 } = require("../controllers/leads");
 
@@ -117,6 +118,7 @@ router.route("/gig/:gigId").get(getLeadsByGigId);
 router.route("/gig/:gigId/search").get(searchLeadsByGigId);
 router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
 router.route("/company/:companyId/stats").get(getCompanyLeadStats);
+router.route("/company/:companyId/rep-coverage").get(getCompanyRepCoverage);
 
 
 

@@ -894,3 +894,105 @@ exports.getCompanyLeadStats = async (req, res) => {
     });
   }
 };
+
+// @desc    Per-rep coverage progression for a company (Leads view → "Progression de couverture")
+// @route   GET /api/leads/company/:companyId/rep-coverage
+// @access  Private
+// @query   gigId — optional; "all" or omit for whole company
+// @query   limit — optional cap on the number of reps returned (default 10)
+//
+// Logic:
+//   • Each rep = a User who placed at least one outbound call on this company.
+//   • `current` = number of *distinct* leads that rep has called at least once.
+//     (Re-dialling the same lead doesn't inflate the bar.)
+//   • `target` = ceil(totalCompanyLeads / numReps) — i.e. the equal-share of
+//     the company's lead pool. If we ever introduce a configurable quota per
+//     rep, swap this in here.
+exports.getCompanyRepCoverage = async (req, res) => {
+  try {
+    const { companyId } = req.params;
+    const { gigId } = req.query;
+    const limit = Math.max(1, Math.min(50, parseInt(req.query.limit, 10) || 10));
+
+    if (!companyId) {
+      return res
+        .status(400)
+        .json({ success: false, message: "Company ID is required" });
+    }
+    if (!mongoose.Types.ObjectId.isValid(companyId)) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Invalid company ID format" });
+    }
+
+    const companyObjId = new mongoose.Types.ObjectId(companyId);
+    const gigObjId =
+      gigId && gigId !== "all" && mongoose.Types.ObjectId.isValid(gigId)
+        ? new mongoose.Types.ObjectId(gigId)
+        : null;
+
+    // Total leads in the pool (denominator for the fair-share target)
+    const leadFilter = buildCompanyLeadFilter(companyId, gigId);
+    const totalLeads = await Lead.countDocuments(leadFilter);
+
+    // Calls scoped to this company (and optional gig), with a real lead + rep
+    const callMatch = {
+      companyId: companyObjId,
+      lead: { $ne: null },
+      userId: { $ne: null }
+    };
+    if (gigObjId) callMatch.gigId = gigObjId;
+
+    const repAgg = await Call.aggregate([
+      { $match: callMatch },
+      // Collapse multiple calls of the same (rep, lead) pair down to one
+      { $group: { _id: { userId: "$userId", lead: "$lead" } } },
+      { $group: { _id: "$_id.userId", current: { $sum: 1 } } },
+      {
+        $lookup: {
+          from: "users",
+          localField: "_id",
+          foreignField: "_id",
+          as: "user"
+        }
+      },
+      { $unwind: { path: "$user", preserveNullAndEmptyArrays: true } },
+      {
+        $project: {
+          _id: 0,
+          userId: "$_id",
+          current: 1,
+          name: { $ifNull: ["$user.name", "Rep"] }
+        }
+      },
+      { $sort: { current: -1 } },
+      { $limit: limit }
+    ]);
+
+    const numReps = repAgg.length;
+    // Fair-share target = pool / nb of reps. Floor of 1 so we never divide by 0.
+    const target = numReps > 0 ? Math.ceil(totalLeads / numReps) : 0;
+
+    const reps = repAgg.map((r) => ({
+      userId: String(r.userId),
+      name: r.name || "Rep",
+      current: r.current,
+      target,
+      pct:
+        target > 0
+          ? Math.round((r.current / target) * 10000) / 100
+          : 0
+    }));
+
+    res.status(200).json({
+      success: true,
+      gigId: gigObjId ? String(gigObjId) : null,
+      totalLeads,
+      target,
+      reps
+    });
+  } catch (err) {
+    console.error("Error in getCompanyRepCoverage:", err);
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
