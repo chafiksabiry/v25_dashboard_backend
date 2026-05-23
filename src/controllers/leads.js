@@ -794,11 +794,11 @@ exports.getCompanyLeadStats = async (req, res) => {
                   case: {
                     $regexMatch: {
                       input: "$refusalReasons",
-                      regex: "déjà.*assur|already.*insur|assur.*déjà",
+                      regex: "déjà.*équip|already.*equip|déjà.*engag|already.*contract|déjà.*fourn|already.*supplier|déjà.*assur|already.*insur|assur.*déjà",
                       options: "i"
                     }
                   },
-                  then: "alreadyInsured"
+                  then: "alreadyEquipped"
                 },
                 {
                   case: {
@@ -852,7 +852,7 @@ exports.getCompanyLeadStats = async (req, res) => {
       wrong: 0,
       notInterested: 0,
       notAware: 0,
-      alreadyInsured: 0
+      alreadyEquipped: 0
     };
     for (const row of qualityAgg) {
       if (row._id && qualityBuckets.hasOwnProperty(row._id)) {
@@ -867,7 +867,7 @@ exports.getCompanyLeadStats = async (req, res) => {
       wrong: { count: qualityBuckets.wrong, pct: pct(qualityBuckets.wrong) },
       notInterested: { count: qualityBuckets.notInterested, pct: pct(qualityBuckets.notInterested) },
       notAware: { count: qualityBuckets.notAware, pct: pct(qualityBuckets.notAware) },
-      alreadyInsured: { count: qualityBuckets.alreadyInsured, pct: pct(qualityBuckets.alreadyInsured) }
+      alreadyEquipped: { count: qualityBuckets.alreadyEquipped, pct: pct(qualityBuckets.alreadyEquipped) }
     };
     // Base quality score = share of leads we can still legitimately call.
     const qualityScorePct = quality.valid.pct;
