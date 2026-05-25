@@ -875,6 +875,136 @@ exports.getCompanyLeadStats = async (req, res) => {
       ? Math.round((contacted / total) * 10000) / 100
       : 0;
 
+    // -------------------- Lead status breakdown (CRM Stage / Activity_Tag) --------------------
+    // The Leads dashboard tab shows pipeline statuses — not call coverage KPIs
+    // (those live on the Appels tab). We bucket each lead from Stage, falling
+    // back to Activity_Tag when Stage is empty.
+    const statusAgg = await Lead.aggregate([
+      { $match: leadFilter },
+      {
+        $project: {
+          statusText: {
+            $trim: {
+              input: {
+                $cond: [
+                  {
+                    $gt: [
+                      { $strLenCP: { $ifNull: ["$Stage", ""] } },
+                      0
+                    ]
+                  },
+                  "$Stage",
+                  { $ifNull: ["$Activity_Tag", ""] }
+                ]
+              }
+            }
+          }
+        }
+      },
+      {
+        $project: {
+          bucket: {
+            $switch: {
+              branches: [
+                {
+                  case: { $eq: ["$statusText", ""] },
+                  then: "new"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: { $toLower: "$statusText" },
+                      regex:
+                        "nouveau|^new$|new lead|fresh|non trait|non traité|à appeler|a appeler|to call|uncontacted|pas contact"
+                    }
+                  },
+                  then: "new"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: { $toLower: "$statusText" },
+                      regex:
+                        "qualif|qualified|chaud|hot lead|intéress|interested"
+                    }
+                  },
+                  then: "qualified"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: { $toLower: "$statusText" },
+                      regex: "rdv|rendez|appointment|meeting"
+                    }
+                  },
+                  then: "appointment"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: { $toLower: "$statusText" },
+                      regex:
+                        "gagn|won|convert|closed won|signé|signed|transaction|client"
+                    }
+                  },
+                  then: "won"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: { $toLower: "$statusText" },
+                      regex:
+                        "perd|lost|closed lost|refus|archiv|rejet|reject|not interested|pas intéress"
+                    }
+                  },
+                  then: "lost"
+                },
+                {
+                  case: {
+                    $regexMatch: {
+                      input: { $toLower: "$statusText" },
+                      regex:
+                        "cours|progress|working|en traitement|contacté|contacted|joign|assigned|ouvert|open"
+                    }
+                  },
+                  then: "inProgress"
+                }
+              ],
+              default: "other"
+            }
+          }
+        }
+      },
+      { $group: { _id: "$bucket", count: { $sum: 1 } } }
+    ]);
+
+    const statusBuckets = {
+      new: 0,
+      inProgress: 0,
+      qualified: 0,
+      appointment: 0,
+      won: 0,
+      lost: 0,
+      other: 0
+    };
+    for (const row of statusAgg) {
+      if (row._id && statusBuckets.hasOwnProperty(row._id)) {
+        statusBuckets[row._id] = row.count;
+      } else if (row._id) {
+        statusBuckets.other += row.count;
+      }
+    }
+
+    const statusSummary = {
+      new: { count: statusBuckets.new, pct: pct(statusBuckets.new) },
+      inProgress: { count: statusBuckets.inProgress, pct: pct(statusBuckets.inProgress) },
+      qualified: { count: statusBuckets.qualified, pct: pct(statusBuckets.qualified) },
+      appointment: { count: statusBuckets.appointment, pct: pct(statusBuckets.appointment) },
+      won: { count: statusBuckets.won, pct: pct(statusBuckets.won) },
+      lost: { count: statusBuckets.lost, pct: pct(statusBuckets.lost) },
+      other: { count: statusBuckets.other, pct: pct(statusBuckets.other) }
+    };
+
     res.status(200).json({
       success: true,
       total,
@@ -887,6 +1017,7 @@ exports.getCompanyLeadStats = async (req, res) => {
       quality,
       qualityScorePct,
       attemptDistribution,
+      statusSummary,
       gigId: gigId && gigId !== "all" ? gigId : null
     });
   } catch (err) {
