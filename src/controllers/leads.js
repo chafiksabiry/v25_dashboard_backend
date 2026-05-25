@@ -704,19 +704,23 @@ exports.getCompanyLeadStats = async (req, res) => {
     };
 
     // -------------------- Base quality breakdown --------------------
-    // Classify every lead in the company/gig pool into exactly one bucket
-    // so the percentages always sum to 100%. Order of the switch matters:
-    // we pick the *most specific* signal first.
+    // We only classify leads that have **at least one call attempt** — a
+    // brand-new lead in the base carries no positive nor negative signal
+    // yet, so claiming it is "valid joignable" would over-report the KPI
+    // (e.g. 9 052/9 053 = 99.99% before a single dial). That bucket must
+    // reflect *evidence of reachability*, not optimism.
     //
-    //   wrong          → phone returned a "failed/invalid number" signal
-    //   alreadyInsured → AI refusal reason mentions an existing policy
+    //   wrong          → every call attempt hit an invalid/failed number
+    //   alreadyEquipped→ AI refusal reason mentions an existing policy
     //   notAware       → AI refusal reason mentions ignorance of product
     //   notInterested  → AI flagged a refusal (catch-all for refusals)
-    //   unreachable    → called but never reached a human
-    //   valid          → reached a human OR never called yet (default)
+    //   unreachable    → called but no call ever completed
+    //   valid          → at least one call **completed** (lead picked up)
+    //                    AND no negative classification above
     //
-    // We deliberately classify *uncalled* leads as "valid" because we have
-    // no negative signal on them — they remain candidates for the queue.
+    // Leads with `hasCalls = false` are intentionally excluded from the
+    // breakdown: they belong to a "pas encore appelés" set whose size is
+    // `total - called` (already exposed via `coveragePct`).
     const qualityAgg = await Lead.aggregate([
       { $match: leadFilter },
       {
@@ -727,9 +731,9 @@ exports.getCompanyLeadStats = async (req, res) => {
           as: "calls"
         }
       },
+      { $match: { "calls.0": { $exists: true } } },
       {
         $project: {
-          hasCalls: { $gt: [{ $size: "$calls" }, 0] },
           anyCompleted: {
             $anyElementTrue: {
               $map: {
@@ -829,16 +833,11 @@ exports.getCompanyLeadStats = async (req, res) => {
                   then: "notInterested"
                 },
                 {
-                  case: {
-                    $and: [
-                      { $eq: ["$hasCalls", true] },
-                      { $eq: ["$anyCompleted", false] }
-                    ]
-                  },
-                  then: "unreachable"
+                  case: { $eq: ["$anyCompleted", true] },
+                  then: "valid"
                 }
               ],
-              default: "valid"
+              default: "unreachable"
             }
           }
         }
@@ -869,8 +868,12 @@ exports.getCompanyLeadStats = async (req, res) => {
       notAware: { count: qualityBuckets.notAware, pct: pct(qualityBuckets.notAware) },
       alreadyEquipped: { count: qualityBuckets.alreadyEquipped, pct: pct(qualityBuckets.alreadyEquipped) }
     };
-    // Base quality score = share of leads we can still legitimately call.
-    const qualityScorePct = quality.valid.pct;
+    // Base quality score = share of the *whole base* that was actually
+    // reached on the phone (a real human picked up). This is what the
+    // company cares about: how much of the uploaded list is usable.
+    const qualityScorePct = total > 0
+      ? Math.round((contacted / total) * 10000) / 100
+      : 0;
 
     res.status(200).json({
       success: true,
