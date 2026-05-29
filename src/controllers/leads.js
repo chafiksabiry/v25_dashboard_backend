@@ -155,39 +155,146 @@ exports.createLeadsBulk = async (req, res) => {
 
     console.log(`📝 Processing bulk creation of ${leads.length} leads`);
 
-    // Add gigId and userId to each lead if not present
-    const leadsToCreate = leads.map(lead => ({
+    const fallbackGigId = gigId || (req.gig ? req.gig._id : undefined);
+    const fallbackUserId = req.user ? req.user._id : undefined;
+
+    const normalizedLeads = leads.map((lead) => ({
       ...lead,
-      gigId: lead.gigId || gigId || (req.gig ? req.gig._id : undefined),
-      userId: lead.userId || (req.user ? req.user._id : undefined)
+      gigId: lead.gigId || fallbackGigId,
+      userId: lead.userId || fallbackUserId,
     }));
 
-    // Use insertMany for better performance
+    const normalize = (value) =>
+      typeof value === 'string' ? value.trim().toLowerCase() : '';
+
+    const isPlaceholderEmail = (email) =>
+      !email || email === 'no-email@placeholder.com';
+    const isPlaceholderPhone = (phone) =>
+      !phone || phone === 'no-phone@placeholder.com';
+
+    const seenEmails = new Set();
+    const seenPhones = new Set();
+    const dedupedInPayload = [];
+    let payloadDuplicates = 0;
+
+    for (const lead of normalizedLeads) {
+      const email = normalize(lead.Email_1);
+      const phone = normalize(lead.Phone);
+
+      const emailKey = !isPlaceholderEmail(email) ? `email:${email}` : null;
+      const phoneKey = !isPlaceholderPhone(phone) ? `phone:${phone}` : null;
+
+      if (
+        (emailKey && seenEmails.has(emailKey)) ||
+        (phoneKey && seenPhones.has(phoneKey))
+      ) {
+        payloadDuplicates += 1;
+        continue;
+      }
+
+      if (emailKey) seenEmails.add(emailKey);
+      if (phoneKey) seenPhones.add(phoneKey);
+      dedupedInPayload.push(lead);
+    }
+
+    const scopeFilters = [];
+    const scopeGigIds = [...new Set(dedupedInPayload.map((l) => l.gigId).filter(Boolean).map(String))];
+    const scopeCompanyIds = [...new Set(dedupedInPayload.map((l) => l.companyId).filter(Boolean).map(String))];
+    if (scopeGigIds.length) scopeFilters.push({ gigId: { $in: scopeGigIds } });
+    if (scopeCompanyIds.length) scopeFilters.push({ companyId: { $in: scopeCompanyIds } });
+
+    let existingEmails = new Set();
+    let existingPhones = new Set();
+
+    if (scopeFilters.length) {
+      const candidateEmails = dedupedInPayload
+        .map((l) => l.Email_1)
+        .filter((v) => v && !isPlaceholderEmail(v));
+      const candidatePhones = dedupedInPayload
+        .map((l) => l.Phone)
+        .filter((v) => v && !isPlaceholderPhone(v));
+
+      const valueFilters = [];
+      if (candidateEmails.length) valueFilters.push({ Email_1: { $in: candidateEmails } });
+      if (candidatePhones.length) valueFilters.push({ Phone: { $in: candidatePhones } });
+
+      if (valueFilters.length) {
+        const existing = await Lead.find({
+          $and: [
+            { $or: scopeFilters },
+            { $or: valueFilters },
+          ],
+        })
+          .select('Email_1 Phone')
+          .lean();
+
+        existingEmails = new Set(
+          existing.map((l) => normalize(l.Email_1)).filter((v) => v && !isPlaceholderEmail(v))
+        );
+        existingPhones = new Set(
+          existing.map((l) => normalize(l.Phone)).filter((v) => v && !isPlaceholderPhone(v))
+        );
+      }
+    }
+
+    let dbDuplicates = 0;
+    const leadsToCreate = dedupedInPayload.filter((lead) => {
+      const email = normalize(lead.Email_1);
+      const phone = normalize(lead.Phone);
+      const duplicate =
+        (email && !isPlaceholderEmail(email) && existingEmails.has(email)) ||
+        (phone && !isPlaceholderPhone(phone) && existingPhones.has(phone));
+      if (duplicate) {
+        dbDuplicates += 1;
+        return false;
+      }
+      return true;
+    });
+
+    const skipped = payloadDuplicates + dbDuplicates;
+    console.log(
+      `🪞 Dedup: payload=${payloadDuplicates}, db=${dbDuplicates}, total skipped=${skipped}, inserting=${leadsToCreate.length}`
+    );
+
+    if (leadsToCreate.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'All provided leads were duplicates and were skipped',
+        count: 0,
+        skipped,
+        data: [],
+      });
+    }
+
     const createdLeads = await Lead.insertMany(leadsToCreate, { ordered: false });
 
-    console.log(`✅ Successfully created ${createdLeads.length} leads`);
+    console.log(`✅ Successfully created ${createdLeads.length} leads (skipped ${skipped} duplicates)`);
 
-    res.status(201).json({
+    res.status(skipped > 0 ? 207 : 201).json({
       success: true,
+      message:
+        skipped > 0
+          ? `${createdLeads.length} leads créés, ${skipped} doublons ignorés`
+          : `${createdLeads.length} leads créés`,
       count: createdLeads.length,
-      data: createdLeads
+      skipped,
+      data: createdLeads,
     });
   } catch (err) {
     console.error('❌ Error in createLeadsBulk:', err);
 
-    // Handle partial success with ordered: false
-    if (err.code === 11000) { // Duplicate key error
-      return res.status(207).json({ // 207 Multi-Status
+    if (err.code === 11000) {
+      return res.status(207).json({
         success: true,
-        message: "Some leads were created, but duplicates were skipped",
+        message: 'Some leads were created, but duplicates were skipped',
         count: err.insertedDocs ? err.insertedDocs.length : 0,
-        data: err.insertedDocs || []
+        data: err.insertedDocs || [],
       });
     }
 
     res.status(400).json({
       success: false,
-      error: err.message
+      error: err.message,
     });
   }
 };
