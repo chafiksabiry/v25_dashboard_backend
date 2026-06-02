@@ -197,16 +197,13 @@ exports.createLeadsBulk = async (req, res) => {
       dedupedInPayload.push(lead);
     }
 
-    const scopeFilters = [];
+    // Duplicate scope is PER GIG only — the same contact can exist in multiple gigs.
     const scopeGigIds = [...new Set(dedupedInPayload.map((l) => l.gigId).filter(Boolean).map(String))];
-    const scopeCompanyIds = [...new Set(dedupedInPayload.map((l) => l.companyId).filter(Boolean).map(String))];
-    if (scopeGigIds.length) scopeFilters.push({ gigId: { $in: scopeGigIds } });
-    if (scopeCompanyIds.length) scopeFilters.push({ companyId: { $in: scopeCompanyIds } });
 
     let existingEmails = new Set();
     let existingPhones = new Set();
 
-    if (scopeFilters.length) {
+    if (scopeGigIds.length) {
       const candidateEmails = dedupedInPayload
         .map((l) => l.Email_1)
         .filter((v) => v && !isPlaceholderEmail(v));
@@ -221,7 +218,7 @@ exports.createLeadsBulk = async (req, res) => {
       if (valueFilters.length) {
         const existing = await Lead.find({
           $and: [
-            { $or: scopeFilters },
+            { gigId: { $in: scopeGigIds } },
             { $or: valueFilters },
           ],
         })
