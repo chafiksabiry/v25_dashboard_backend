@@ -3,6 +3,26 @@ const Transaction = require('../models/Transaction');
 const { Lead } = require('../models/Lead');
 const { Agent } = require('../models/Agent');
 const { Gig } = require('../models/Gig');
+const mongoose = require('mongoose');
+
+async function markLeadContractSigned(leadId, agentId) {
+  if (!leadId || !agentId || !mongoose.Types.ObjectId.isValid(String(leadId))) return;
+  try {
+    await Lead.updateOne(
+      { _id: new mongoose.Types.ObjectId(String(leadId)) },
+      {
+        $set: {
+          signedByAgent: new mongoose.Types.ObjectId(String(agentId)),
+          signedAt: new Date(),
+          assignedTo: new mongoose.Types.ObjectId(String(agentId)),
+          updatedAt: new Date(),
+        },
+      }
+    );
+  } catch (err) {
+    console.error('[markLeadContractSigned] failed:', err.message);
+  }
+}
 /*
 // @desc    Get all calls
 // @route   GET /api/calls
@@ -354,6 +374,9 @@ exports.updateCall = async (req, res) => {
           },
           { upsert: true, new: true, setDefaultsOnInsert: true }
         );
+        if (validByCompany === true) {
+          await markLeadContractSigned(callObj.lead, callObj.agent);
+        }
       }
       delete req.body.transaction;
     }
@@ -381,6 +404,9 @@ exports.updateCall = async (req, res) => {
           },
           { upsert: true, new: true, setDefaultsOnInsert: true }
         );
+        if (validByCompany === true) {
+          await markLeadContractSigned(callObj.lead, callObj.agent);
+        }
       }
       delete req.body['transaction.validByReps'];
       delete req.body['transaction.validByCompany'];

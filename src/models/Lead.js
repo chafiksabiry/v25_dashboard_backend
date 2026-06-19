@@ -84,6 +84,32 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  /** Agent currently in cockpit on this lead (exclusive lock). */
+  cockpitLockedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false,
+    default: null,
+  },
+  cockpitLockedAt: {
+    type: Date,
+    default: null,
+  },
+  cockpitLockExpiresAt: {
+    type: Date,
+    default: null,
+  },
+  /** Agent who closed a validated contract on this lead (exclusive per gig). */
+  signedByAgent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false,
+    default: null,
+  },
+  signedAt: {
+    type: Date,
+    default: null,
+  },
   Pipeline: {
     type: String,
     required: false

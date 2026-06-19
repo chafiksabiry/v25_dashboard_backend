@@ -1,5 +1,6 @@
 const { Lead } = require("../models/Lead");
 const { Call } = require("../models/Call");
+const Transaction = require("../models/Transaction");
 const mongoose = require("mongoose");
 
 /** Build the Mongo filter for leads belonging to a company (optional gig). */
@@ -9,6 +10,160 @@ function buildCompanyLeadFilter(companyId, gigId) {
     filter.gigId = new mongoose.Types.ObjectId(gigId);
   }
   return filter;
+}
+
+const COCKPIT_LOCK_MS = 5 * 60 * 1000;
+
+const LEAD_LIST_SELECT =
+  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo';
+
+async function loadSignedLeadOwners(gigObjectId) {
+  const map = new Map();
+  const gigStr = String(gigObjectId);
+
+  const signedLeads = await Lead.find({
+    gigId: gigObjectId,
+    signedByAgent: { $exists: true, $ne: null },
+  })
+    .select('_id signedByAgent')
+    .lean();
+  for (const row of signedLeads) {
+    map.set(String(row._id), String(row.signedByAgent));
+  }
+
+  const txs = await Transaction.find({
+    validByCompany: true,
+    lead: { $exists: true, $ne: null },
+  })
+    .select('lead agent gigId')
+    .lean();
+
+  const leadIdsMissingGig = [
+    ...new Set(
+      txs.filter((tx) => !tx.gigId && tx.lead).map((tx) => String(tx.lead))
+    ),
+  ].filter((id) => mongoose.Types.ObjectId.isValid(id));
+
+  let leadOnThisGig = new Set();
+  if (leadIdsMissingGig.length > 0) {
+    const leads = await Lead.find({
+      _id: { $in: leadIdsMissingGig.map((id) => new mongoose.Types.ObjectId(id)) },
+      gigId: gigObjectId,
+    })
+      .select('_id')
+      .lean();
+    leadOnThisGig = new Set(leads.map((l) => String(l._id)));
+  }
+
+  for (const tx of txs) {
+    if (!tx.lead || !tx.agent) continue;
+    const onGig =
+      (tx.gigId && String(tx.gigId) === gigStr) ||
+      leadOnThisGig.has(String(tx.lead));
+    if (onGig) map.set(String(tx.lead), String(tx.agent));
+  }
+  return map;
+}
+
+async function loadCalledLeadIdsByAgent(gigObjectId, agentId) {
+  const called = new Set();
+  if (!agentId || !mongoose.Types.ObjectId.isValid(agentId)) return called;
+
+  const agentOid = new mongoose.Types.ObjectId(agentId);
+  const gigStr = String(gigObjectId);
+
+  const leadsOnGig = await Lead.find({ gigId: gigObjectId }).select('_id').lean();
+  const leadIdsOnGig = leadsOnGig.map((l) => l._id);
+  if (leadIdsOnGig.length === 0) return called;
+
+  const calls = await Call.find({
+    agent: agentOid,
+    lead: { $in: leadIdsOnGig },
+    $or: [
+      { gigId: gigObjectId },
+      { gigId: null },
+      { gigId: { $exists: false } },
+    ],
+  })
+    .select('lead gigId')
+    .lean();
+
+  for (const row of calls) {
+    if (!row.lead) continue;
+    const onGig =
+      (row.gigId && String(row.gigId) === gigStr) ||
+      leadIdsOnGig.some((id) => String(id) === String(row.lead));
+    if (onGig) called.add(String(row.lead));
+  }
+  return called;
+}
+
+function filterAndAnnotateLeadsForAgent(leads, agentId, signedOwners, calledLeadIds) {
+  if (!agentId) {
+    return leads.filter((lead) => {
+      const id = String(lead._id || lead.id);
+      return !signedOwners.has(id);
+    });
+  }
+  const agentStr = String(agentId);
+  return leads
+    .filter((lead) => {
+      const id = String(lead._id || lead.id);
+      const owner = signedOwners.get(id);
+      return !owner || owner === agentStr;
+    })
+    .map((lead) => {
+      const doc = typeof lead.toObject === 'function' ? lead.toObject() : { ...lead };
+      const id = String(doc._id || doc.id);
+      const owner = signedOwners.get(id);
+      const isSignedByMe = owner === agentStr;
+      const isCalledByMe = !isSignedByMe && calledLeadIds.has(id);
+      return {
+        ...doc,
+        isSignedByMe,
+        isCalledByMe,
+        signedByAgent: doc.signedByAgent || owner || null,
+      };
+    });
+}
+
+function hashSeed(str) {
+  let h = 2166136261;
+  for (let i = 0; i < str.length; i++) {
+    h ^= str.charCodeAt(i);
+    h = Math.imul(h, 16777619);
+  }
+  return h >>> 0;
+}
+
+function mulberry32(seed) {
+  return function mulberry() {
+    let t = seed += 0x6D2B79F5;
+    t = Math.imul(t ^ t >>> 15, t | 1);
+    t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function seededShuffle(items, seed) {
+  const arr = [...items];
+  const rand = mulberry32(seed);
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rand() * (i + 1));
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+  }
+  return arr;
+}
+
+function toObjectId(id) {
+  if (!id) return null;
+  return mongoose.Types.ObjectId.isValid(id) ? new mongoose.Types.ObjectId(id) : id;
+}
+
+function isCockpitLockActive(lead, now = new Date()) {
+  if (!lead?.cockpitLockedBy) return false;
+  if (!lead.cockpitLockExpiresAt) return true;
+  return new Date(lead.cockpitLockExpiresAt) > now;
 }
 
 // @desc    Get all leads
@@ -531,24 +686,37 @@ exports.getLeadsByGigId = async (req, res) => {
     const queryGigId = new mongoose.Types.ObjectId(gigId);
     console.log(`🔍 Querying MongoDB with gigId (ObjectId): ${queryGigId}`);
 
-    // LOG THE QUERY before executing
-    const query = { gigId: queryGigId };
-    console.log("🛠️  Full Query Object:", JSON.stringify(query));
+    const agentId = String(req.query.agentId || '').trim();
+    const signedOwners = await loadSignedLeadOwners(queryGigId);
+    const calledLeadIds = await loadCalledLeadIdsByAgent(queryGigId, agentId);
 
-    // Get total count for pagination
-    const total = await Lead.countDocuments(query);
-    console.log(`📊 Found ${total} matching documents in 'leads' collection`);
+    const shuffle =
+      req.query.shuffle === '1' ||
+      req.query.shuffle === 'true' ||
+      req.query.random === '1' ||
+      req.query.random === 'true';
 
-    // Get paginated leads
-    const leads = await Lead.find(query)
+    const allGigLeads = await Lead.find({ gigId: queryGigId })
       .populate({
         path: 'assignedTo',
         select: 'name email',
-        options: { lean: true }
+        options: { lean: true },
       })
-      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
-      .skip(skip)
-      .limit(limit);
+      .select(LEAD_LIST_SELECT)
+      .lean();
+
+    let visibleLeads = filterAndAnnotateLeadsForAgent(allGigLeads, agentId, signedOwners, calledLeadIds);
+
+    if (shuffle && agentId) {
+      const day = new Date().toISOString().slice(0, 10);
+      const seed = hashSeed(`${agentId}:${gigId}:${day}`);
+      visibleLeads = seededShuffle(visibleLeads, seed);
+    }
+
+    const total = visibleLeads.length;
+    const leads = visibleLeads.slice(skip, skip + limit);
+
+    console.log(`📊 Found ${total} visible leads for agent on gig`);
 
     console.log(`📤 Returning ${leads.length} leads in response`);
     console.log("----------------------------------------------------");
@@ -1231,6 +1399,112 @@ exports.getCompanyRepCoverage = async (req, res) => {
     });
   } catch (err) {
     console.error("Error in getCompanyRepCoverage:", err);
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// @desc    Claim cockpit access for a lead (first agent wins)
+// @route   POST /api/leads/:id/cockpit-claim
+exports.claimCockpit = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agentId, gigId } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid lead ID' });
+    }
+    if (!agentId) {
+      return res.status(400).json({ success: false, error: 'agentId is required' });
+    }
+
+    const now = new Date();
+    const expires = new Date(now.getTime() + COCKPIT_LOCK_MS);
+    const agentObjectId = toObjectId(agentId);
+    const leadObjectId = new mongoose.Types.ObjectId(id);
+
+    const claimFilter = {
+      _id: leadObjectId,
+      $or: [
+        { cockpitLockedBy: null },
+        { cockpitLockExpiresAt: { $lt: now } },
+        { cockpitLockExpiresAt: { $exists: false } },
+        { cockpitLockedBy: agentObjectId },
+      ],
+    };
+    if (gigId && mongoose.Types.ObjectId.isValid(gigId)) {
+      claimFilter.gigId = new mongoose.Types.ObjectId(gigId);
+    }
+
+    const lead = await Lead.findOneAndUpdate(
+      claimFilter,
+      {
+        $set: {
+          cockpitLockedBy: agentObjectId,
+          cockpitLockedAt: now,
+          cockpitLockExpiresAt: expires,
+        },
+      },
+      { new: true }
+    ).select(LEAD_LIST_SELECT);
+
+    if (lead) {
+      return res.status(200).json({ success: true, data: lead });
+    }
+
+    const existing = await Lead.findById(leadObjectId).select(
+      'cockpitLockedBy cockpitLockExpiresAt gigId'
+    );
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Lead not found' });
+    }
+    if (isCockpitLockActive(existing, now)) {
+      return res.status(409).json({
+        success: false,
+        locked: true,
+        lockedBy: String(existing.cockpitLockedBy),
+        message: 'Lead is already open in another agent cockpit',
+      });
+    }
+
+    return res.status(409).json({
+      success: false,
+      error: 'Could not claim cockpit for this lead',
+    });
+  } catch (err) {
+    console.error('Error in claimCockpit:', err);
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// @desc    Release cockpit lock when agent leaves cockpit
+// @route   POST /api/leads/:id/cockpit-release
+exports.releaseCockpit = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agentId } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid lead ID' });
+    }
+    if (!agentId) {
+      return res.status(400).json({ success: false, error: 'agentId is required' });
+    }
+
+    const agentObjectId = toObjectId(agentId);
+    await Lead.findOneAndUpdate(
+      { _id: id, cockpitLockedBy: agentObjectId },
+      {
+        $set: {
+          cockpitLockedBy: null,
+          cockpitLockedAt: null,
+          cockpitLockExpiresAt: null,
+        },
+      }
+    );
+
+    res.status(200).json({ success: true });
+  } catch (err) {
+    console.error('Error in releaseCockpit:', err);
     res.status(400).json({ success: false, error: err.message });
   }
 };
