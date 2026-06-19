@@ -707,6 +707,13 @@ exports.getLeadsByGigId = async (req, res) => {
 
     let visibleLeads = filterAndAnnotateLeadsForAgent(allGigLeads, agentId, signedOwners, calledLeadIds);
 
+    const leadStatus = String(req.query.leadStatus || 'all').toLowerCase();
+    if (leadStatus === 'called') {
+      visibleLeads = visibleLeads.filter((l) => l.isCalledByMe);
+    } else if (leadStatus === 'signed') {
+      visibleLeads = visibleLeads.filter((l) => l.isSignedByMe);
+    }
+
     if (shuffle && agentId) {
       const day = new Date().toISOString().slice(0, 10);
       const seed = hashSeed(`${agentId}:${gigId}:${day}`);
