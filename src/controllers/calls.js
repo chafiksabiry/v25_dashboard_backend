@@ -569,19 +569,36 @@ exports.initiateCall = async (req, res) => {
 // @access  Private
 exports.getCallsGigs = async (req, res) => {
   try {
-    const { userId } = req.query;
+    const { userId, agentId } = req.query;
+    const rawIds = [userId, agentId].filter(Boolean);
 
-    if (!userId) {
+    if (rawIds.length === 0) {
       return res.status(400).json({
         success: false,
-        error: 'Please provide user ID'
+        error: 'Please provide user ID or agent ID'
       });
     }
 
-    const leads = await Lead.find({ assignedTo: userId });
-    const gigIds = [...new Set(leads.map(l => l.gigId).filter(id => id))];
-    
-    const gigs = await Gig.find({ _id: { $in: gigIds } });
+    const objectIds = rawIds
+      .filter((id) => mongoose.Types.ObjectId.isValid(String(id)))
+      .map((id) => new mongoose.Types.ObjectId(String(id)));
+
+    const [leadGigIds, callGigIds] = await Promise.all([
+      Lead.distinct('gigId', {
+        assignedTo: { $in: objectIds },
+        gigId: { $ne: null }
+      }),
+      Call.distinct('gigId', {
+        agent: { $in: objectIds },
+        gigId: { $ne: null }
+      })
+    ]);
+
+    const gigIds = [...new Set([...leadGigIds, ...callGigIds].map(String))];
+
+    const gigs = gigIds.length
+      ? await Gig.find({ _id: { $in: gigIds } }).select('title commission rewardBonus')
+      : [];
 
     res.status(200).json({
       success: true,
