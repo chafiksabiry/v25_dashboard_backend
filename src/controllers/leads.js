@@ -98,6 +98,44 @@ async function loadCalledLeadIdsByAgent(gigObjectId, agentId) {
   return called;
 }
 
+/** Lead IDs that have at least one call on the given gig (any rep). */
+async function loadCalledLeadIdsForGig(gigObjectId) {
+  const called = new Set();
+  const gigStr = String(gigObjectId);
+
+  const leadsOnGig = await Lead.find({ gigId: gigObjectId }).select('_id').lean();
+  const leadIdsOnGig = leadsOnGig.map((l) => l._id);
+  if (leadIdsOnGig.length === 0) return called;
+
+  const calls = await Call.find({
+    lead: { $in: leadIdsOnGig },
+    $or: [
+      { gigId: gigObjectId },
+      { gigId: null },
+      { gigId: { $exists: false } },
+    ],
+  })
+    .select('lead gigId')
+    .lean();
+
+  for (const row of calls) {
+    if (!row.lead) continue;
+    const onGig =
+      (row.gigId && String(row.gigId) === gigStr) ||
+      leadIdsOnGig.some((id) => String(id) === String(row.lead));
+    if (onGig) called.add(String(row.lead));
+  }
+  return called;
+}
+
+function annotateLeadsWithCallStatus(leads, calledLeadIds) {
+  return leads.map((lead) => {
+    const doc = typeof lead.toObject === 'function' ? lead.toObject() : { ...lead };
+    const id = String(doc._id || doc.id);
+    return { ...doc, hasBeenCalled: calledLeadIds.has(id) };
+  });
+}
+
 function filterAndAnnotateLeadsForAgent(leads, agentId, signedOwners, calledLeadIds) {
   if (!agentId) {
     return leads.filter((lead) => {
@@ -712,6 +750,22 @@ exports.getLeadsByGigId = async (req, res) => {
       visibleLeads = visibleLeads.filter((l) => l.isCalledByMe);
     } else if (leadStatus === 'signed') {
       visibleLeads = visibleLeads.filter((l) => l.isSignedByMe);
+    }
+
+    const callFilterGigParam = String(req.query.callFilterGigId || '').trim();
+    let callFilterGigId = queryGigId;
+    if (callFilterGigParam && mongoose.Types.ObjectId.isValid(callFilterGigParam)) {
+      callFilterGigId = new mongoose.Types.ObjectId(callFilterGigParam);
+    }
+
+    const callFilter = String(req.query.callFilter || 'all').toLowerCase();
+    const companyCalledIds = await loadCalledLeadIdsForGig(callFilterGigId);
+    visibleLeads = annotateLeadsWithCallStatus(visibleLeads, companyCalledIds);
+
+    if (callFilter === 'called') {
+      visibleLeads = visibleLeads.filter((l) => l.hasBeenCalled);
+    } else if (callFilter === 'not_called' || callFilter === 'notcalled') {
+      visibleLeads = visibleLeads.filter((l) => !l.hasBeenCalled);
     }
 
     if (shuffle && agentId) {

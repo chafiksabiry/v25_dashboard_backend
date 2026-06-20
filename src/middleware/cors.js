@@ -13,7 +13,7 @@ const corsOptions = {
       'http://localhost:3000',
       'http://localhost:5173',
       'http://localhost:3001',
-      'https://harx25pageslinks.netlify.app',
+      'https://harx.ai',
       'https://harxv25dashboardfrontend.netlify.app',
       'https://harxv25dashboardfrontend.netlify.app',
       'https://harxv25comporchestratorfront.netlify.app'
