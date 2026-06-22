@@ -98,34 +98,84 @@ async function loadCalledLeadIdsByAgent(gigObjectId, agentId) {
   return called;
 }
 
-/** Lead IDs that have at least one call on the given gig (any rep). */
-async function loadCalledLeadIdsForGig(gigObjectId) {
+/** Bucket CRM Stage / Activity_Tag — same rules as getCompanyLeadStats statusSummary. */
+function bucketLeadPipelineStatus(lead) {
+  const statusText = String(lead.Stage || lead.Activity_Tag || '').trim().toLowerCase();
+  if (!statusText) return 'new';
+  if (/nouveau|^new$|new lead|fresh|non trait|non traité|à appeler|a appeler|to call|uncontacted|pas contact/.test(statusText)) {
+    return 'new';
+  }
+  if (/qualif|qualified|chaud|hot lead|intéress|interested/.test(statusText)) {
+    return 'qualified';
+  }
+  if (/rdv|rendez|appointment|meeting/.test(statusText)) {
+    return 'appointment';
+  }
+  if (/gagn|won|convert|closed won|signé|signed|transaction|client/.test(statusText)) {
+    return 'won';
+  }
+  if (/perd|lost|closed lost|refus|archiv|rejet|reject|not interested|pas intéress/.test(statusText)) {
+    return 'lost';
+  }
+  if (/cours|progress|working|en traitement|contacté|contacted|joign|assigned|ouvert|open/.test(statusText)) {
+    return 'inProgress';
+  }
+  return 'other';
+}
+
+/**
+ * Distinct leads with calls / completed calls for a gig.
+ * Matches getCompanyLeadStats aggregation (company call + lead on gig).
+ */
+async function loadLeadCallSetsForGig(gigObjectId) {
   const called = new Set();
-  const gigStr = String(gigObjectId);
+  const contacted = new Set();
 
-  const leadsOnGig = await Lead.find({ gigId: gigObjectId }).select('_id').lean();
+  const leadsOnGig = await Lead.find({ gigId: gigObjectId }).select('_id companyId').lean();
   const leadIdsOnGig = leadsOnGig.map((l) => l._id);
-  if (leadIdsOnGig.length === 0) return called;
+  if (leadIdsOnGig.length === 0) return { called, contacted };
 
-  const calls = await Call.find({
-    lead: { $in: leadIdsOnGig },
-    $or: [
-      { gigId: gigObjectId },
-      { gigId: null },
-      { gigId: { $exists: false } },
-    ],
-  })
-    .select('lead gigId')
-    .lean();
+  const companyId = leadsOnGig[0]?.companyId;
+  const callQuery = { lead: { $in: leadIdsOnGig } };
+  if (companyId) callQuery.companyId = companyId;
 
+  const calls = await Call.find(callQuery).select('lead status').lean();
   for (const row of calls) {
     if (!row.lead) continue;
-    const onGig =
-      (row.gigId && String(row.gigId) === gigStr) ||
-      leadIdsOnGig.some((id) => String(id) === String(row.lead));
-    if (onGig) called.add(String(row.lead));
+    const leadId = String(row.lead);
+    called.add(leadId);
+    if (row.status === 'completed' || row.status === 'Completed') {
+      contacted.add(leadId);
+    }
   }
+  return { called, contacted };
+}
+
+/** Lead IDs that have at least one call on the given gig (any rep). */
+async function loadCalledLeadIdsForGig(gigObjectId) {
+  const { called } = await loadLeadCallSetsForGig(gigObjectId);
   return called;
+}
+
+function applyCompanyCallFilter(leads, callFilter, callSets) {
+  const filter = String(callFilter || 'all').toLowerCase();
+  if (filter === 'all') return leads;
+  if (filter === 'called') {
+    return leads.filter((l) => callSets.called.has(String(l._id || l.id)));
+  }
+  if (filter === 'not_called' || filter === 'notcalled') {
+    return leads.filter((l) => !callSets.called.has(String(l._id || l.id)));
+  }
+  if (filter === 'contacted') {
+    return leads.filter((l) => callSets.contacted.has(String(l._id || l.id)));
+  }
+  if (filter === 'rdv' || filter === 'appointment') {
+    return leads.filter((l) => bucketLeadPipelineStatus(l) === 'appointment');
+  }
+  if (filter === 'converted' || filter === 'won') {
+    return leads.filter((l) => bucketLeadPipelineStatus(l) === 'won');
+  }
+  return leads;
 }
 
 function annotateLeadsWithCallStatus(leads, calledLeadIds) {
@@ -759,14 +809,9 @@ exports.getLeadsByGigId = async (req, res) => {
     }
 
     const callFilter = String(req.query.callFilter || 'all').toLowerCase();
-    const companyCalledIds = await loadCalledLeadIdsForGig(callFilterGigId);
-    visibleLeads = annotateLeadsWithCallStatus(visibleLeads, companyCalledIds);
-
-    if (callFilter === 'called') {
-      visibleLeads = visibleLeads.filter((l) => l.hasBeenCalled);
-    } else if (callFilter === 'not_called' || callFilter === 'notcalled') {
-      visibleLeads = visibleLeads.filter((l) => !l.hasBeenCalled);
-    }
+    const companyCallSets = await loadLeadCallSetsForGig(callFilterGigId);
+    visibleLeads = annotateLeadsWithCallStatus(visibleLeads, companyCallSets.called);
+    visibleLeads = applyCompanyCallFilter(visibleLeads, callFilter, companyCallSets);
 
     if (shuffle && agentId) {
       const day = new Date().toISOString().slice(0, 10);
@@ -848,7 +893,7 @@ exports.searchLeadsByGigId = async (req, res) => {
     };
 
     // Get all matching leads without pagination
-    const leads = await Lead.find(searchQuery)
+    let leads = await Lead.find(searchQuery)
       .populate({
         path: 'assignedTo',
         select: 'name email',
@@ -856,6 +901,17 @@ exports.searchLeadsByGigId = async (req, res) => {
       })
       .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
       .sort({ updatedAt: -1 }); // Sort by most recent first
+
+    const callFilterGigParam = String(req.query.callFilterGigId || '').trim();
+    let callFilterGigId = new mongoose.Types.ObjectId(gigId);
+    if (callFilterGigParam && mongoose.Types.ObjectId.isValid(callFilterGigParam)) {
+      callFilterGigId = new mongoose.Types.ObjectId(callFilterGigParam);
+    }
+
+    const callFilter = String(req.query.callFilter || 'all').toLowerCase();
+    const companyCallSets = await loadLeadCallSetsForGig(callFilterGigId);
+    leads = annotateLeadsWithCallStatus(leads, companyCallSets.called);
+    leads = applyCompanyCallFilter(leads, callFilter, companyCallSets);
 
     res.status(200).json({
       success: true,
