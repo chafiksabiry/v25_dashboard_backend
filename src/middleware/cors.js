@@ -12,7 +12,12 @@ const corsOptions = {
       'http://localhost:5183',
       'http://localhost:3000',
       'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://localhost:8100',
       'http://localhost:3001',
+      'capacitor://localhost',
+      'ionic://localhost',
       'https://harx.ai',
       'https://harxv25dashboardfrontend.netlify.app',
       'https://harxv25dashboardfrontend.netlify.app',
@@ -22,9 +27,10 @@ const corsOptions = {
     // Permettre les requêtes sans origine (comme les requêtes de test)
     if (!origin) return callback(null, true);
 
+    const isLocalDev = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
 
     // Check if origin is in allowed list
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (allowedOrigins.indexOf(origin) !== -1 || isLocalDev) {
       callback(null, true);
     } else {
       // Also allow any subdomain of harx.ai or netlify.app for development/preprod
