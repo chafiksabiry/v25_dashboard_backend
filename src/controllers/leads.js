@@ -175,6 +175,12 @@ function applyCompanyCallFilter(leads, callFilter, callSets) {
   if (filter === 'converted' || filter === 'won') {
     return leads.filter((l) => bucketLeadPipelineStatus(l) === 'won');
   }
+  if (filter === 'pipeline' || filter === 'rdv_converted') {
+    return leads.filter((l) => {
+      const bucket = bucketLeadPipelineStatus(l);
+      return bucket === 'appointment' || bucket === 'won';
+    });
+  }
   return leads;
 }
 
