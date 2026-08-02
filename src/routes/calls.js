@@ -9,12 +9,16 @@ const {
   endCall,
   addNote,
   updateQualityScore,
-  initiateCall
+  initiateCall,
+  getCallsGigs
 } = require('../controllers/calls');
 
 const router = express.Router();
 
 //router.use(protect);
+
+router.route('/gigs')
+  .get(getCallsGigs);
 
 router.route('/')
   .get(getCalls)

@@ -38,6 +38,30 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  First_Name: {
+    type: String,
+    required: false
+  },
+  Last_Name: {
+    type: String,
+    required: false
+  },
+  Address: {
+    type: String,
+    required: false
+  },
+  Postal_Code: {
+    type: String,
+    required: false
+  },
+  City: {
+    type: String,
+    required: false
+  },
+  Date_of_Birth: {
+    type: String,
+    required: false
+  },
   Stage: { //
     type: String,
     required: false
@@ -46,7 +70,7 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false,
     validate: {
-      validator: function(v) {
+      validator: function (v) {
         return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v);
       },
       message: props => `${props.value} is not a valid email address!`
@@ -60,6 +84,32 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  /** Agent currently in cockpit on this lead (exclusive lock). */
+  cockpitLockedBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false,
+    default: null,
+  },
+  cockpitLockedAt: {
+    type: Date,
+    default: null,
+  },
+  cockpitLockExpiresAt: {
+    type: Date,
+    default: null,
+  },
+  /** Agent who closed a validated contract on this lead (exclusive per gig). */
+  signedByAgent: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: false,
+    default: null,
+  },
+  signedAt: {
+    type: Date,
+    default: null,
+  },
   Pipeline: {
     type: String,
     required: false
@@ -70,7 +120,7 @@ const leadSchema = new mongoose.Schema({
   }
 });
 
-leadSchema.pre('save', function(next) {
+leadSchema.pre('save', function (next) {
   this.updatedAt = new Date();
   next();
 });

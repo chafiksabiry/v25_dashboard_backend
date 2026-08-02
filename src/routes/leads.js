@@ -13,7 +13,13 @@ const {
   getLeadsByPipelineAndStage,
   getLeadsByGigId,
   searchLeadsByGigId,
-  hasCompanyLeads
+
+  hasCompanyLeads,
+  getCompanyLeadStats,
+  getCompanyRepCoverage,
+  createLeadsBulk,
+  claimCockpit,
+  releaseCockpit,
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -104,6 +110,9 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
 
 
 router.route("/").get(getLeads).post(createLead);
+router.post("/bulk", createLeadsBulk); // Add bulk creation route BEFORE /:id routes
+router.post("/:id/cockpit-claim", claimCockpit);
+router.post("/:id/cockpit-release", releaseCockpit);
 router.route("/:id").get(getLead).put(updateLead).delete(deleteLead);
 router.route("/:id/analyze").post(analyzeLead);
 router.route("/:id/generate-script").post(generateScript);
@@ -112,6 +121,8 @@ router.route("/filter").get(getLeadsByPipelineAndStage);
 router.route("/gig/:gigId").get(getLeadsByGigId);
 router.route("/gig/:gigId/search").get(searchLeadsByGigId);
 router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
+router.route("/company/:companyId/stats").get(getCompanyLeadStats);
+router.route("/company/:companyId/rep-coverage").get(getCompanyRepCoverage);
 
 
 
