@@ -3,28 +3,39 @@ const cors = require('cors');
 const corsOptions = {
   origin: function (origin, callback) {
     const allowedOrigins = [
-      'https://v25.harx.ai', 
-      'https://api-dashboard.harx.ai', 
-      'https://v25-prod.harx.ai',
-      'https://prod-api-dashboard.harx.ai',
-      'https://prod-comp-orchestrator.harx.ai',
+      'https://v25.harx.ai',
+      'https://api-dashboard.harx.ai',
+      'https://v25-preprod.harx.ai',
+      'https://preprod-api-dashboard.harx.ai',
+      'https://preprod-comp-orchestrator.harx.ai',
       'https://comp-orchestrator.harx.ai',
-      'http://localhost:5183', 
-      'http://localhost:3000', 
-      'http://localhost:5173', 
-      'http://localhost:3001'
+      'http://localhost:5183',
+      'http://localhost:3000',
+      'http://localhost:5173',
+      'http://127.0.0.1:5173',
+      'http://localhost:5174',
+      'http://localhost:8100',
+      'http://localhost:3001',
+      'capacitor://localhost',
+      'ionic://localhost',
+      'https://harx.ai',
+      'https://harxv25dashboardfrontend.netlify.app',
+      'https://harxv25dashboardfrontend.netlify.app',
+      'https://harxv25comporchestratorfront.netlify.app'
     ];
-    
+
     // Permettre les requêtes sans origine (comme les requêtes de test)
     if (!origin) return callback(null, true);
-    
+
+    const isLocalDev = /^https?:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/.test(origin);
+
     // Check if origin is in allowed list
-    if (allowedOrigins.indexOf(origin) !== -1) {
+    if (allowedOrigins.indexOf(origin) !== -1 || isLocalDev) {
       callback(null, true);
     } else {
-      // Also allow any subdomain of harx.ai for development/prod
-      if (origin && origin.endsWith('.harx.ai')) {
-        console.log('CORS allowing harx.ai subdomain:', origin);
+      // Also allow any subdomain of harx.ai or netlify.app for development/preprod
+      if (origin && (origin.endsWith('.harx.ai') || origin.endsWith('.netlify.app'))) {
+        console.log('CORS allowing subdomain:', origin);
         callback(null, true);
       } else {
         console.log('CORS blocked origin:', origin);
@@ -41,7 +52,9 @@ const corsOptions = {
     'Accept',
     'Origin',
     'X-Requested-With',
-    'Cache-Control'
+    'Cache-Control',
+    'x-user-id',
+    'x-agent-id'
   ],
   exposedHeaders: ['Content-Length', 'X-Requested-With'],
   preflightContinue: false,

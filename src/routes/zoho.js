@@ -123,7 +123,7 @@ router.get('/auth/callback', async (req, res) => {
       { upsert: true }
     );
 
-    return res.redirect(`https://v25-prod.harx.ai/app11?session=someGeneratedSessionId`);
+    return res.redirect(`https://v25-preprod.harx.ai/app11?session=someGeneratedSessionId`);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -175,21 +175,21 @@ router.post('/emails/:id/archive', zohoTokenMiddleware, requireZohoConfig, archi
 router.get('/check-configuration', zohoTokenMiddleware, requireZohoConfig, checkConfiguration);
 router.get('/pipelines', zohoTokenMiddleware, requireZohoConfig, getPipelines);
 
-router.get('/config/:id', getZohoConfigById);
-router.get('/configs', getAllZohoConfigs);
-
 router.get('/config/user/:userId', async (req, res) => {
   try {
     const { userId } = req.params;
     const config = await ZohoConfig.findOne({ userId });
     if (!config) {
-      return res.status(404).json({ error: 'Configuration not found for this user' });
+      return res.status(200).json(null);
     }
     res.json(config);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
 });
+
+router.get('/config/:id', getZohoConfigById);
+router.get('/configs', getAllZohoConfigs);
 
 router.post('/config/user/:userId/refresh-token', async (req, res) => {
   try {
