@@ -193,10 +193,19 @@ function annotateLeadsWithCallStatus(leads, calledLeadIds) {
 }
 
 function filterAndAnnotateLeadsForAgent(leads, agentId, signedOwners, calledLeadIds) {
+  // Company / admin list (no agentId): show every lead, including those already
+  // claimed/called (signedByAgent). Hiding signed leads here made stats show
+  // LEADS: 1 while the table was empty after the first call.
   if (!agentId) {
-    return leads.filter((lead) => {
-      const id = String(lead._id || lead.id);
-      return !signedOwners.has(id);
+    return leads.map((lead) => {
+      const doc = typeof lead.toObject === 'function' ? lead.toObject() : { ...lead };
+      const id = String(doc._id || doc.id);
+      const owner = signedOwners.get(id);
+      return {
+        ...doc,
+        signedByAgent: doc.signedByAgent || owner || null,
+        hasBeenCalled: calledLeadIds.has(id) || Boolean(owner),
+      };
     });
   }
   const agentStr = String(agentId);
