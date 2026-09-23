@@ -20,6 +20,7 @@ const {
   createLeadsBulk,
   claimCockpit,
   releaseCockpit,
+  setDisposition,
 } = require("../controllers/leads");
 
 const router = express.Router();
@@ -113,6 +114,7 @@ router.route("/").get(getLeads).post(createLead);
 router.post("/bulk", createLeadsBulk); // Add bulk creation route BEFORE /:id routes
 router.post("/:id/cockpit-claim", claimCockpit);
 router.post("/:id/cockpit-release", releaseCockpit);
+router.put("/:id/disposition", setDisposition);
 router.route("/:id").get(getLead).put(updateLead).delete(deleteLead);
 router.route("/:id/analyze").post(analyzeLead);
 router.route("/:id/generate-script").post(generateScript);

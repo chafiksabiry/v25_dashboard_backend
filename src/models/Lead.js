@@ -114,15 +114,64 @@ const leadSchema = new mongoose.Schema({
     type: String,
     required: false
   },
+  Created_Time: {
+    type: Date,
+    default: Date.now,
+  },
   updatedAt: {
     type: Date,
     default: Date.now
-  }
-});
+  },
 
-leadSchema.pre('save', function (next) {
-  this.updatedAt = new Date();
-  next();
+  /**
+   * REP-side disposition — updated by the REP after each contact attempt.
+   * Values map to the official HARX call disposition ladder.
+   */
+  repDisposition: {
+    type: String,
+    enum: [
+      null,
+      'to_call',            // À appeler
+      'called_unreachable', // Appelé - Injoignable
+      'called_voicemail',   // Appelé - Répondeur
+      'called_wrong_number',// Appelé - Numéro non attribué
+      'called_callback',    // Appelé - Souhaite être rappelé
+      'called_rdv',         // Appelé - RDV pris pour rappel
+      'argued_rdv',         // Appel argumenté - RDV pris / délai réflexion
+      'argued_declined',    // Appel argumenté - Transaction déclinée
+      'argued_done',        // Appel argumenté - Transaction aboutie
+    ],
+    default: null,
+  },
+  repDispositionAt: { type: Date, default: null },
+  repDispositionBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+
+  /**
+   * Exclusive REP assignment after first meaningful contact
+   * (called_rdv and above). Other REPs will no longer see this lead.
+   */
+  assignedRepId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+  assignedRepAt: { type: Date, default: null },
+
+  /**
+   * Post-transaction follow-up calls (J+2 / J+7 / J+15).
+   * Array of scheduled callbacks configured by the company.
+   */
+  followUpCalls: [{
+    dayOffset: { type: Number },              // 2, 7 or 15
+    scheduledAt: { type: Date },
+    completedAt: { type: Date, default: null },
+    repId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    rewardAmount: { type: Number, default: 0 },
+  }],
 });
 
 const Lead = mongoose.model('Lead', leadSchema);
