@@ -15,7 +15,12 @@ function buildCompanyLeadFilter(companyId, gigId) {
 const COCKPIT_LOCK_MS = 5 * 60 * 1000;
 
 const LEAD_LIST_SELECT =
-  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo';
+  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy assignedRepId assignedRepAt';
+
+/** Dispositions that lock a lead exclusively to the first REP who reached this level. */
+const EXCLUSIVE_DISPOSITIONS = new Set(['called_rdv', 'argued_rdv', 'argued_declined', 'argued_done']);
+/** Leads with this disposition disappear from ALL REPs (company/admin still sees them). */
+const INVISIBLE_DISPOSITIONS = new Set(['argued_declined']);
 
 async function loadSignedLeadOwners(gigObjectId) {
   const map = new Map();
@@ -124,7 +129,7 @@ function bucketLeadPipelineStatus(lead) {
 }
 
 /**
- * Distinct leads with calls / completed calls for a gig.
+ * Distinct leads with transactions /completed calls for a gig.
  * Matches getCompanyLeadStats aggregation (company call + lead on gig).
  */
 async function loadLeadCallSetsForGig(gigObjectId) {
@@ -212,19 +217,33 @@ function filterAndAnnotateLeadsForAgent(leads, agentId, signedOwners, calledLead
   return leads
     .filter((lead) => {
       const id = String(lead._id || lead.id);
+      const disp = lead.repDisposition || null;
+
+      // "Transaction déclinée" disappears from ALL reps (company still sees via no-agentId path)
+      if (INVISIBLE_DISPOSITIONS.has(disp)) return false;
+
+      // Exclusive assignment: if assigned to another rep, hide from this rep
+      const assignedRep = lead.assignedRepId ? String(lead.assignedRepId) : null;
+      if (assignedRep && assignedRep !== agentStr) return false;
+
+      // Legacy signedOwners check (for leads closed via Transaction model)
       const owner = signedOwners.get(id);
-      return !owner || owner === agentStr;
+      if (owner && owner !== agentStr) return false;
+
+      return true;
     })
     .map((lead) => {
       const doc = typeof lead.toObject === 'function' ? lead.toObject() : { ...lead };
       const id = String(doc._id || doc.id);
       const owner = signedOwners.get(id);
-      const isSignedByMe = owner === agentStr;
+      const isSignedByMe = owner === agentStr || String(doc.assignedRepId || '') === agentStr;
       const isCalledByMe = !isSignedByMe && calledLeadIds.has(id);
+      const isAssignedToMe = String(doc.assignedRepId || '') === agentStr;
       return {
         ...doc,
         isSignedByMe,
         isCalledByMe,
+        isAssignedToMe,
         signedByAgent: doc.signedByAgent || owner || null,
       };
     });
@@ -815,6 +834,33 @@ exports.getLeadsByGigId = async (req, res) => {
       visibleLeads = visibleLeads.filter((l) => l.isCalledByMe);
     } else if (leadStatus === 'signed') {
       visibleLeads = visibleLeads.filter((l) => l.isSignedByMe);
+    }
+
+    // -------- Disposition filter --------
+    const dispositionFilter = String(req.query.disposition || 'all').toLowerCase();
+    if (dispositionFilter !== 'all') {
+      if (dispositionFilter === 'none') {
+        visibleLeads = visibleLeads.filter((l) => !l.repDisposition);
+      } else {
+        visibleLeads = visibleLeads.filter((l) => l.repDisposition === dispositionFilter);
+      }
+    }
+
+    // -------- Period filter (createdFrom / createdTo) --------
+    const createdFrom = req.query.createdFrom ? new Date(req.query.createdFrom) : null;
+    const createdTo = req.query.createdTo ? new Date(req.query.createdTo) : null;
+    if (createdFrom || createdTo) {
+      visibleLeads = visibleLeads.filter((l) => {
+        const created = l.Created_Time ? new Date(l.Created_Time) : null;
+        if (!created) return true; // no date → don't filter out
+        if (createdFrom && created < createdFrom) return false;
+        if (createdTo) {
+          const endOfDay = new Date(createdTo);
+          endOfDay.setHours(23, 59, 59, 999);
+          if (created > endOfDay) return false;
+        }
+        return true;
+      });
     }
 
     const callFilterGigParam = String(req.query.callFilterGigId || '').trim();
@@ -1604,6 +1650,61 @@ exports.claimCockpit = async (req, res) => {
     });
   } catch (err) {
     console.error('Error in claimCockpit:', err);
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// @desc    Set REP disposition on a lead (call outcome ladder)
+// @route   PUT /api/leads/:id/disposition
+// @access  Private
+exports.setDisposition = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { agentId, disposition } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid lead ID' });
+    }
+    if (!agentId) {
+      return res.status(400).json({ success: false, error: 'agentId is required' });
+    }
+    const validDispositions = [
+      'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number',
+      'called_callback', 'called_rdv', 'argued_rdv', 'argued_declined', 'argued_done',
+    ];
+    if (disposition && !validDispositions.includes(disposition)) {
+      return res.status(400).json({ success: false, error: 'Invalid disposition value' });
+    }
+
+    const now = new Date();
+    const agentOid = toObjectId(agentId);
+    const updateFields = {
+      repDisposition: disposition || null,
+      repDispositionAt: disposition ? now : null,
+      repDispositionBy: disposition ? agentOid : null,
+    };
+
+    // If reaching exclusive tier, assign this rep exclusively (only if not already assigned)
+    if (EXCLUSIVE_DISPOSITIONS.has(disposition)) {
+      const existing = await Lead.findById(id).select('assignedRepId').lean();
+      if (!existing) return res.status(404).json({ success: false, error: 'Lead not found' });
+      if (!existing.assignedRepId) {
+        updateFields.assignedRepId = agentOid;
+        updateFields.assignedRepAt = now;
+      }
+    }
+
+    const updated = await Lead.findByIdAndUpdate(
+      id,
+      { $set: updateFields },
+      { new: true }
+    ).select(LEAD_LIST_SELECT);
+
+    if (!updated) return res.status(404).json({ success: false, error: 'Lead not found' });
+
+    res.status(200).json({ success: true, data: updated });
+  } catch (err) {
+    console.error('Error in setDisposition:', err);
     res.status(400).json({ success: false, error: err.message });
   }
 };
