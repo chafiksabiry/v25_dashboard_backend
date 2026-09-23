@@ -174,6 +174,25 @@ const leadSchema = new mongoose.Schema({
   }],
 });
 
+leadSchema.pre('save', function (next) {
+  this.updatedAt = new Date();
+  // Backfill Created_Time for legacy documents on next save
+  if (!this.Created_Time) {
+    this.Created_Time = this.updatedAt;
+  }
+  next();
+});
+
+/**
+ * Virtual: resolve creation date for legacy leads without Created_Time.
+ * Priority: Created_Time → updatedAt → ObjectId timestamp.
+ */
+leadSchema.virtual('createdAtResolved').get(function () {
+  if (this.Created_Time) return this.Created_Time;
+  if (this.updatedAt)    return this.updatedAt;
+  return this._id && this._id.getTimestamp ? this._id.getTimestamp() : null;
+});
+
 const Lead = mongoose.model('Lead', leadSchema);
 
 module.exports = { Lead };

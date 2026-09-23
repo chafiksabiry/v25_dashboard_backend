@@ -818,7 +818,7 @@ exports.getLeadsByGigId = async (req, res) => {
       req.query.random === '1' ||
       req.query.random === 'true';
 
-    const allGigLeads = await Lead.find({ gigId: queryGigId })
+    const rawLeads = await Lead.find({ gigId: queryGigId })
       .populate({
         path: 'assignedTo',
         select: 'name email',
@@ -826,6 +826,16 @@ exports.getLeadsByGigId = async (req, res) => {
       })
       .select(LEAD_LIST_SELECT)
       .lean();
+
+    // Backfill Created_Time for legacy leads: use updatedAt, then ObjectId timestamp
+    const allGigLeads = rawLeads.map((lead) => {
+      if (!lead.Created_Time) {
+        const fallback = lead.updatedAt
+          || (lead._id && lead._id.getTimestamp ? lead._id.getTimestamp() : null);
+        return { ...lead, Created_Time: fallback };
+      }
+      return lead;
+    });
 
     let visibleLeads = filterAndAnnotateLeadsForAgent(allGigLeads, agentId, signedOwners, calledLeadIds);
 
