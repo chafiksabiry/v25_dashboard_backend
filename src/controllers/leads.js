@@ -22,6 +22,92 @@ const EXCLUSIVE_DISPOSITIONS = new Set(['called_rdv', 'argued_rdv', 'argued_decl
 /** Leads with this disposition disappear from ALL REPs (company/admin still sees them). */
 const INVISIBLE_DISPOSITIONS = new Set(['argued_declined']);
 
+const CALL_OUTCOME_TO_DISPOSITION = {
+  voicemail: 'called_voicemail',
+  no_answer: 'called_unreachable',
+  busy: 'called_unreachable',
+  wrong_number: 'called_wrong_number',
+  callback_requested: 'called_callback',
+  appointment: 'called_rdv',
+  transaction: 'argued_done',
+  refusal: 'argued_declined',
+  not_interested: 'argued_declined',
+  already_equipped: 'argued_declined',
+};
+
+const TWILIO_STATUS_TO_DISPOSITION = {
+  busy: 'called_unreachable',
+  'no-answer': 'called_unreachable',
+  noanswer: 'called_unreachable',
+  canceled: 'called_unreachable',
+  cancelled: 'called_unreachable',
+  failed: 'called_wrong_number',
+};
+
+function dispositionFromStage(stage) {
+  const s = String(stage || '').toLowerCase();
+  if (!s.trim()) return null;
+  if (/r[ée]pondeur|voicemail|messagerie/.test(s)) return 'called_voicemail';
+  if (/injoignable|unreachable/.test(s)) return 'called_unreachable';
+  if (/non attribu|wrong number|faux num/.test(s)) return 'called_wrong_number';
+  if (/rdv/.test(s)) return 'called_rdv';
+  if (/souhait|rappel/.test(s)) return 'called_callback';
+  if (/d[ée]clin|refus/.test(s)) return 'argued_declined';
+  if (/aboutie|transaction/.test(s)) return 'argued_done';
+  if (/[àa]\s*appeler|to call/.test(s)) return 'to_call';
+  return null;
+}
+
+function dispositionFromCall(call) {
+  if (!call) return null;
+  const answeredBy = String(call.answeredBy || '').toLowerCase();
+  if (answeredBy.startsWith('machine') || answeredBy === 'fax') return 'called_voicemail';
+  const outcome = String(call.callOutcome || '').toLowerCase();
+  if (CALL_OUTCOME_TO_DISPOSITION[outcome]) return CALL_OUTCOME_TO_DISPOSITION[outcome];
+  const status = String(call.status || '').toLowerCase();
+  return TWILIO_STATUS_TO_DISPOSITION[status] || null;
+}
+
+/** Stored REP choice wins. Otherwise the latest call, then the CRM stage. Unset means À appeler. */
+function effectiveDisposition(lead, latestCall) {
+  if (lead?.repDisposition) return String(lead.repDisposition);
+  return dispositionFromCall(latestCall) || dispositionFromStage(lead?.Stage) || 'to_call';
+}
+
+async function loadLatestCallByLead(leadIds) {
+  const ids = (leadIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
+  if (!ids.length) return new Map();
+  const calls = await Call.find({ lead: { $in: ids } })
+    .select('lead callOutcome status answeredBy createdAt startTime')
+    .sort({ createdAt: -1 })
+    .lean();
+  const map = new Map();
+  for (const call of calls) {
+    const id = String(call.lead);
+    if (!map.has(id)) map.set(id, call);
+  }
+  return map;
+}
+
+function applyDispositionFilter(leads, latestByLead, dispositionFilter) {
+  const annotated = leads.map((lead) => {
+    const latest = latestByLead.get(String(lead._id || lead.id));
+    const stored = lead.repDisposition || null;
+    const derived = dispositionFromCall(latest) || dispositionFromStage(lead.Stage);
+    const effective = stored || derived || 'to_call';
+    return {
+      ...lead,
+      repDisposition: effective,
+      dispositionUnclassified: !stored && !derived,
+    };
+  });
+  if (!dispositionFilter || dispositionFilter === 'all') return annotated;
+  if (dispositionFilter === 'none') {
+    return annotated.filter((lead) => lead.dispositionUnclassified);
+  }
+  return annotated.filter((lead) => lead.repDisposition === dispositionFilter);
+}
+
 async function loadSignedLeadOwners(gigObjectId) {
   const map = new Map();
   const gigStr = String(gigObjectId);
@@ -847,14 +933,11 @@ exports.getLeadsByGigId = async (req, res) => {
     }
 
     // -------- Disposition filter --------
+    // Unset leads count as "À appeler". A latest call (répondeur, injoignable, …)
+    // fills the ladder when the REP has not chosen a status yet.
     const dispositionFilter = String(req.query.disposition || 'all').toLowerCase();
-    if (dispositionFilter !== 'all') {
-      if (dispositionFilter === 'none') {
-        visibleLeads = visibleLeads.filter((l) => !l.repDisposition);
-      } else {
-        visibleLeads = visibleLeads.filter((l) => l.repDisposition === dispositionFilter);
-      }
-    }
+    const latestByLead = await loadLatestCallByLead(visibleLeads.map((l) => l._id));
+    visibleLeads = applyDispositionFilter(visibleLeads, latestByLead, dispositionFilter);
 
     // -------- Period filter (createdFrom / createdTo) --------
     const createdFrom = req.query.createdFrom ? new Date(req.query.createdFrom) : null;
