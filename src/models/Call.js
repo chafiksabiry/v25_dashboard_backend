@@ -120,6 +120,7 @@ const callSchema = new mongoose.Schema({
     enum: ['ai', 'rep', 'system'],
     default: null,
   },
+  answeredBy: { type: String, default: null },
   callbackAt:    { type: Date, default: null, index: true },
   appointmentAt: { type: Date, default: null, index: true },
 
