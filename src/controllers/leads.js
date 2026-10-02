@@ -15,7 +15,12 @@ function buildCompanyLeadFilter(companyId, gigId) {
 const COCKPIT_LOCK_MS = 5 * 60 * 1000;
 
 const LEAD_LIST_SELECT =
-  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy assignedRepId assignedRepAt';
+  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy pendingDisposition pendingDispositionAt pendingDispositionBy assignedRepId assignedRepAt';
+
+const VALID_DISPOSITIONS = [
+  'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number',
+  'called_callback', 'called_rdv', 'argued_rdv', 'argued_declined', 'argued_done',
+];
 
 /** Dispositions that lock a lead exclusively to the first REP who reached this level. */
 const EXCLUSIVE_DISPOSITIONS = new Set(['called_rdv', 'argued_rdv', 'argued_declined', 'argued_done']);
@@ -1748,7 +1753,7 @@ exports.claimCockpit = async (req, res) => {
   }
 };
 
-// @desc    Set REP disposition on a lead (call outcome ladder)
+// @desc    REP proposes a disposition — waits for company confirmation
 // @route   PUT /api/leads/:id/disposition
 // @access  Private
 exports.setDisposition = async (req, res) => {
@@ -1762,28 +1767,97 @@ exports.setDisposition = async (req, res) => {
     if (!agentId) {
       return res.status(400).json({ success: false, error: 'agentId is required' });
     }
-    const validDispositions = [
-      'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number',
-      'called_callback', 'called_rdv', 'argued_rdv', 'argued_declined', 'argued_done',
-    ];
-    if (disposition && !validDispositions.includes(disposition)) {
+    if (disposition && !VALID_DISPOSITIONS.includes(disposition)) {
       return res.status(400).json({ success: false, error: 'Invalid disposition value' });
     }
 
+    const existing = await Lead.findById(id).select('repDisposition pendingDisposition').lean();
+    if (!existing) return res.status(404).json({ success: false, error: 'Lead not found' });
+
     const now = new Date();
     const agentOid = toObjectId(agentId);
+    const nextDisposition = disposition || null;
+    const current = existing.repDisposition || null;
+
+    // Same as already confirmed → clear any pending request
+    if (nextDisposition === current || (!nextDisposition && !current)) {
+      const updated = await Lead.findByIdAndUpdate(
+        id,
+        {
+          $set: {
+            pendingDisposition: null,
+            pendingDispositionAt: null,
+            pendingDispositionBy: null,
+          },
+        },
+        { new: true }
+      ).select(LEAD_LIST_SELECT);
+      return res.status(200).json({ success: true, data: updated, pending: false });
+    }
+
+    const updated = await Lead.findByIdAndUpdate(
+      id,
+      {
+        $set: {
+          pendingDisposition: nextDisposition,
+          pendingDispositionAt: nextDisposition ? now : null,
+          pendingDispositionBy: nextDisposition ? agentOid : null,
+        },
+      },
+      { new: true }
+    ).select(LEAD_LIST_SELECT);
+
+    if (!updated) return res.status(404).json({ success: false, error: 'Lead not found' });
+
+    res.status(200).json({ success: true, data: updated, pending: true });
+  } catch (err) {
+    console.error('Error in setDisposition:', err);
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// @desc    Company confirms or rejects a pending REP disposition
+// @route   PUT /api/leads/:id/disposition/confirm
+// @access  Private (company)
+exports.confirmDisposition = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { companyId, approve } = req.body || {};
+
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ success: false, error: 'Invalid lead ID' });
+    }
+    if (typeof approve !== 'boolean') {
+      return res.status(400).json({ success: false, error: 'approve (boolean) is required' });
+    }
+
+    const lead = await Lead.findById(id)
+      .select('companyId pendingDisposition pendingDispositionBy assignedRepId')
+      .lean();
+    if (!lead) return res.status(404).json({ success: false, error: 'Lead not found' });
+
+    if (companyId && lead.companyId && String(lead.companyId) !== String(companyId)) {
+      return res.status(403).json({ success: false, error: 'Lead does not belong to this company' });
+    }
+
+    if (!lead.pendingDisposition) {
+      return res.status(400).json({ success: false, error: 'No pending disposition to confirm' });
+    }
+
+    const now = new Date();
     const updateFields = {
-      repDisposition: disposition || null,
-      repDispositionAt: disposition ? now : null,
-      repDispositionBy: disposition ? agentOid : null,
+      pendingDisposition: null,
+      pendingDispositionAt: null,
+      pendingDispositionBy: null,
     };
 
-    // If reaching exclusive tier, assign this rep exclusively (only if not already assigned)
-    if (EXCLUSIVE_DISPOSITIONS.has(disposition)) {
-      const existing = await Lead.findById(id).select('assignedRepId').lean();
-      if (!existing) return res.status(404).json({ success: false, error: 'Lead not found' });
-      if (!existing.assignedRepId) {
-        updateFields.assignedRepId = agentOid;
+    if (approve) {
+      updateFields.repDisposition = lead.pendingDisposition;
+      updateFields.repDispositionAt = now;
+      updateFields.repDispositionBy = lead.pendingDispositionBy || null;
+
+      if (EXCLUSIVE_DISPOSITIONS.has(lead.pendingDisposition) && !lead.assignedRepId && lead.pendingDispositionBy) {
+        updateFields.assignedRepId = lead.pendingDispositionBy;
         updateFields.assignedRepAt = now;
       }
     }
@@ -1794,11 +1868,9 @@ exports.setDisposition = async (req, res) => {
       { new: true }
     ).select(LEAD_LIST_SELECT);
 
-    if (!updated) return res.status(404).json({ success: false, error: 'Lead not found' });
-
-    res.status(200).json({ success: true, data: updated });
+    res.status(200).json({ success: true, data: updated, approved: approve });
   } catch (err) {
-    console.error('Error in setDisposition:', err);
+    console.error('Error in confirmDisposition:', err);
     res.status(400).json({ success: false, error: err.message });
   }
 };
