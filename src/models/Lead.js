@@ -151,6 +151,33 @@ const leadSchema = new mongoose.Schema({
   },
 
   /**
+   * REP proposed a new disposition — waits for company confirmation
+   * before becoming the effective `repDisposition`.
+   */
+  pendingDisposition: {
+    type: String,
+    enum: [
+      null,
+      'to_call',
+      'called_unreachable',
+      'called_voicemail',
+      'called_wrong_number',
+      'called_callback',
+      'called_rdv',
+      'argued_rdv',
+      'argued_declined',
+      'argued_done',
+    ],
+    default: null,
+  },
+  pendingDispositionAt: { type: Date, default: null },
+  pendingDispositionBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    default: null,
+  },
+
+  /**
    * Exclusive REP assignment after first meaningful contact
    * (called_rdv and above). Other REPs will no longer see this lead.
    */
