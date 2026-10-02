@@ -23,12 +23,13 @@ const EXCLUSIVE_DISPOSITIONS = new Set(['called_rdv', 'argued_rdv', 'argued_decl
 const INVISIBLE_DISPOSITIONS = new Set(['argued_declined']);
 
 const CALL_OUTCOME_TO_DISPOSITION = {
-  voicemail: 'called_voicemail',
+  voicemail: 'called_voicemail', // Twilio AMD / answering machine
   no_answer: 'called_unreachable',
-  busy: 'called_unreachable',
-  wrong_number: 'called_wrong_number',
+  busy: 'called_unreachable', // Twilio Busy
+  wrong_number: 'called_wrong_number', // Twilio Failed
   callback_requested: 'called_callback',
   appointment: 'called_rdv',
+  argued_interested: 'argued_rdv',
   transaction: 'argued_done',
   refusal: 'argued_declined',
   not_interested: 'argued_declined',
@@ -77,7 +78,7 @@ function effectiveDisposition(lead, latestCall) {
 async function loadLatestCallByLead(leadIds) {
   const ids = (leadIds || []).filter((id) => id && mongoose.Types.ObjectId.isValid(String(id)));
   if (!ids.length) return new Map();
-  const calls = await Call.find({ lead: { $in: ids } })
+  const calls = await Call.find({ lead: { $in: ids }, archived: { $ne: true } })
     .select('lead callOutcome status answeredBy createdAt startTime')
     .sort({ createdAt: -1 })
     .lean();
