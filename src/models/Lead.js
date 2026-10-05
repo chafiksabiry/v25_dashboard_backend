@@ -189,6 +189,23 @@ const leadSchema = new mongoose.Schema({
   assignedRepAt: { type: Date, default: null },
 
   /**
+   * Next RDV / callback datetime for Workspace auto-reminders.
+   * Set by REP during the call or by AI transcript extraction.
+   */
+  nextFollowUpAt: { type: Date, default: null, index: true },
+  nextFollowUpType: {
+    type: String,
+    enum: [null, 'appointment', 'callback'],
+    default: null,
+  },
+  nextFollowUpSource: {
+    type: String,
+    enum: [null, 'rep', 'ai'],
+    default: null,
+  },
+  nextFollowUpNotifiedAt: { type: Date, default: null },
+
+  /**
    * Post-transaction follow-up calls (J+2 / J+7 / J+15).
    * Array of scheduled callbacks configured by the company.
    */

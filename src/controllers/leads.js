@@ -15,7 +15,7 @@ function buildCompanyLeadFilter(companyId, gigId) {
 const COCKPIT_LOCK_MS = 5 * 60 * 1000;
 
 const LEAD_LIST_SELECT =
-  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy pendingDisposition pendingDispositionAt pendingDispositionBy assignedRepId assignedRepAt';
+  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy pendingDisposition pendingDispositionAt pendingDispositionBy assignedRepId assignedRepAt nextFollowUpAt nextFollowUpType nextFollowUpSource nextFollowUpNotifiedAt';
 
 const VALID_DISPOSITIONS = [
   'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number',
@@ -331,11 +331,18 @@ function filterAndAnnotateLeadsForAgent(leads, agentId, signedOwners, calledLead
       const isSignedByMe = owner === agentStr || String(doc.assignedRepId || '') === agentStr;
       const isCalledByMe = !isSignedByMe && calledLeadIds.has(id);
       const isAssignedToMe = String(doc.assignedRepId || '') === agentStr;
+      const disp = String(doc.repDisposition || '');
+      const isRdvByMe =
+        !isSignedByMe &&
+        (doc.nextFollowUpType === 'appointment' ||
+          disp === 'called_rdv' ||
+          disp === 'argued_rdv');
       return {
         ...doc,
         isSignedByMe,
         isCalledByMe,
         isAssignedToMe,
+        isRdvByMe,
         signedByAgent: doc.signedByAgent || owner || null,
       };
     });
