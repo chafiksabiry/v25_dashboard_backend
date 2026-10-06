@@ -205,6 +205,10 @@ const leadSchema = new mongoose.Schema({
   },
   nextFollowUpNotifiedAt: { type: Date, default: null },
 
+  /** Soft-delete: hidden from company and REP lists, kept in the database. */
+  archived: { type: Boolean, default: false, index: true },
+  archivedAt: { type: Date, default: null },
+
   /**
    * Post-transaction follow-up calls (J+2 / J+7 / J+15).
    * Array of scheduled callbacks configured by the company.

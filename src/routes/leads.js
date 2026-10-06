@@ -7,6 +7,8 @@ const {
   createLead,
   updateLead,
   deleteLead,
+  archiveLead,
+  archiveLeads,
   analyzeLead,
   generateScript,
   getLeadsByUserId,
@@ -113,6 +115,8 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
 
 router.route("/").get(getLeads).post(createLead);
 router.post("/bulk", createLeadsBulk); // Add bulk creation route BEFORE /:id routes
+router.post("/archive", archiveLeads);
+router.post("/:id/archive", archiveLead);
 router.post("/:id/cockpit-claim", claimCockpit);
 router.post("/:id/cockpit-release", releaseCockpit);
 router.put("/:id/disposition", setDisposition);

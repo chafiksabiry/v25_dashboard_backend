@@ -5,7 +5,10 @@ const mongoose = require("mongoose");
 
 /** Build the Mongo filter for leads belonging to a company (optional gig). */
 function buildCompanyLeadFilter(companyId, gigId) {
-  const filter = { companyId: new mongoose.Types.ObjectId(companyId) };
+  const filter = {
+    companyId: new mongoose.Types.ObjectId(companyId),
+    archived: { $ne: true },
+  };
   if (gigId && gigId !== "all" && mongoose.Types.ObjectId.isValid(gigId)) {
     filter.gigId = new mongoose.Types.ObjectId(gigId);
   }
@@ -120,6 +123,7 @@ async function loadSignedLeadOwners(gigObjectId) {
 
   const signedLeads = await Lead.find({
     gigId: gigObjectId,
+    archived: { $ne: true },
     signedByAgent: { $exists: true, $ne: null },
   })
     .select('_id signedByAgent')
@@ -146,6 +150,7 @@ async function loadSignedLeadOwners(gigObjectId) {
     const leads = await Lead.find({
       _id: { $in: leadIdsMissingGig.map((id) => new mongoose.Types.ObjectId(id)) },
       gigId: gigObjectId,
+      archived: { $ne: true },
     })
       .select('_id')
       .lean();
@@ -169,7 +174,7 @@ async function loadCalledLeadIdsByAgent(gigObjectId, agentId) {
   const agentOid = new mongoose.Types.ObjectId(agentId);
   const gigStr = String(gigObjectId);
 
-  const leadsOnGig = await Lead.find({ gigId: gigObjectId }).select('_id').lean();
+  const leadsOnGig = await Lead.find({ gigId: gigObjectId, archived: { $ne: true } }).select('_id').lean();
   const leadIdsOnGig = leadsOnGig.map((l) => l._id);
   if (leadIdsOnGig.length === 0) return called;
 
@@ -228,7 +233,7 @@ async function loadLeadCallSetsForGig(gigObjectId) {
   const called = new Set();
   const contacted = new Set();
 
-  const leadsOnGig = await Lead.find({ gigId: gigObjectId }).select('_id companyId').lean();
+  const leadsOnGig = await Lead.find({ gigId: gigObjectId, archived: { $ne: true } }).select('_id companyId').lean();
   const leadIdsOnGig = leadsOnGig.map((l) => l._id);
   if (leadIdsOnGig.length === 0) return { called, contacted };
 
@@ -716,6 +721,64 @@ exports.updateLead = async (req, res) => {
   }
 };
 
+async function archiveMatchingLeads(filter) {
+  const now = new Date();
+  const result = await Lead.updateMany(
+    { ...filter, archived: { $ne: true } },
+    { $set: { archived: true, archivedAt: now, updatedAt: now } }
+  );
+  return result.modifiedCount || 0;
+}
+
+// @desc    Archive one lead (hidden from lists, kept in the database)
+// @route   POST /api/leads/:id/archive
+exports.archiveLead = async (req, res) => {
+  try {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, error: "Invalid lead ID" });
+    }
+    const archived = await archiveMatchingLeads({
+      _id: new mongoose.Types.ObjectId(req.params.id),
+    });
+    if (!archived) {
+      return res.status(404).json({ success: false, error: "Lead not found" });
+    }
+    res.status(200).json({ success: true, archived });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
+// @desc    Archive selected leads, or every active lead of a gig
+// @route   POST /api/leads/archive
+// @body    { gigId, ids?: string[], all?: boolean }
+exports.archiveLeads = async (req, res) => {
+  try {
+    const gigId = String(req.body?.gigId || "").trim();
+    if (!mongoose.Types.ObjectId.isValid(gigId)) {
+      return res.status(400).json({ success: false, error: "Invalid gig ID" });
+    }
+    const filter = { gigId: new mongoose.Types.ObjectId(gigId) };
+    if (req.body?.all === true) {
+      const archived = await archiveMatchingLeads(filter);
+      return res.status(200).json({ success: true, archived });
+    }
+    const ids = Array.isArray(req.body?.ids) ? req.body.ids : [];
+    const objectIds = ids
+      .map((id) => String(id || "").trim())
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))
+      .map((id) => new mongoose.Types.ObjectId(id));
+    if (!objectIds.length) {
+      return res.status(400).json({ success: false, error: "No leads to archive" });
+    }
+    filter._id = { $in: objectIds };
+    const archived = await archiveMatchingLeads(filter);
+    res.status(200).json({ success: true, archived });
+  } catch (err) {
+    res.status(400).json({ success: false, error: err.message });
+  }
+};
+
 // @desc    Delete lead
 // @route   DELETE /api/leads/:id
 // @access  Private
@@ -917,7 +980,7 @@ exports.getLeadsByGigId = async (req, res) => {
       req.query.random === '1' ||
       req.query.random === 'true';
 
-    const rawLeads = await Lead.find({ gigId: queryGigId })
+    const rawLeads = await Lead.find({ gigId: queryGigId, archived: { $ne: true } })
       .populate({
         path: 'assignedTo',
         select: 'name email',
@@ -1044,6 +1107,7 @@ exports.searchLeadsByGigId = async (req, res) => {
     // Create search query for multiple fields
     const searchQuery = {
       gigId,
+      archived: { $ne: true },
       $or: [
         { Deal_Name: { $regex: search, $options: 'i' } },
         { First_Name: { $regex: search, $options: 'i' } },
@@ -1172,7 +1236,10 @@ exports.getCompanyLeadStats = async (req, res) => {
     //   - called    = distinct leads with at least one call (any status)
     //   - contacted = distinct leads with at least one *completed* call
     //                 (i.e. the lead actually picked up / there was a response)
-    const leadDocMatch = { "leadDoc.companyId": leadFilter.companyId };
+    const leadDocMatch = {
+      "leadDoc.companyId": leadFilter.companyId,
+      "leadDoc.archived": { $ne: true },
+    };
     if (leadFilter.gigId) {
       leadDocMatch["leadDoc.gigId"] = leadFilter.gigId;
     }
