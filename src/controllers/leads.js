@@ -1130,8 +1130,18 @@ exports.searchLeadsByGigId = async (req, res) => {
         select: 'name email',
         options: { lean: true }
       })
-      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt gigId userId')
-      .sort({ updatedAt: -1 }); // Sort by most recent first
+      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt Created_Time repDisposition gigId userId')
+      .sort({ updatedAt: -1 })
+      .lean();
+
+    leads = leads.map((lead) => {
+      if (lead.Created_Time) return lead;
+      const fallback = lead.updatedAt
+        || (lead._id && lead._id.getTimestamp ? lead._id.getTimestamp() : null);
+      return { ...lead, Created_Time: fallback };
+    });
+    const latestByLead = await loadLatestCallByLead(leads.map((lead) => lead._id));
+    leads = applyDispositionFilter(leads, latestByLead, 'all');
 
     const callFilterGigParam = String(req.query.callFilterGigId || '').trim();
     let callFilterGigId = new mongoose.Types.ObjectId(gigId);
