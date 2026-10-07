@@ -184,6 +184,42 @@ function mergeHeaderMappings(suggested, saved) {
   return merged;
 }
 
+/**
+ * Compare current file headers vs previously saved gig schema (mapping + custom labels).
+ * Used to prompt Fusionner / Remplacer on a second upload with different columns.
+ */
+function computeSchemaDiff(headers, savedMapping, savedLabels) {
+  const fileHeaders = (Array.isArray(headers) ? headers : [])
+    .map((h) => String(h || '').trim())
+    .filter(Boolean);
+  const fileSet = new Set(fileHeaders);
+  const previousHeaders = new Set();
+  if (savedMapping && typeof savedMapping === 'object') {
+    for (const key of Object.keys(savedMapping)) {
+      const h = String(key || '').trim();
+      if (h) previousHeaders.add(h);
+    }
+  }
+  if (savedLabels && typeof savedLabels === 'object') {
+    for (const key of Object.keys(savedLabels)) {
+      const h = String(key || '').trim();
+      if (h) previousHeaders.add(h);
+    }
+  }
+  const hasSavedSchema = previousHeaders.size > 0;
+  const added = fileHeaders.filter((h) => !previousHeaders.has(h));
+  const removed = [...previousHeaders].filter((h) => !fileSet.has(h));
+  const columnsChanged = hasSavedSchema && (added.length > 0 || removed.length > 0);
+  return {
+    hasSavedSchema,
+    columnsChanged,
+    added,
+    removed,
+    previousHeaderCount: previousHeaders.size,
+    currentHeaderCount: fileHeaders.length,
+  };
+}
+
 async function readGigImportMapping(gigId) {
   if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return null;
   const gig = await Gig.findById(gigId).select('leadImportMapping').lean();
@@ -229,7 +265,8 @@ async function saveGigImportMapping(
   gigId,
   headerMapping,
   visibility = null,
-  customFieldLabels = null
+  customFieldLabels = null,
+  schemaMode = 'replace'
 ) {
   if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return;
   const cleaned = {};
@@ -239,18 +276,37 @@ async function saveGigImportMapping(
     if (!HARX_IMPORT_FIELDS.includes(value)) continue;
     cleaned[header] = value;
   }
+  const mode = String(schemaMode || 'replace').toLowerCase() === 'merge' ? 'merge' : 'replace';
   const $set = {
     leadImportMapping: cleaned,
     leadImportMappingUpdatedAt: new Date(),
   };
-  if (visibility) {
-    $set.leadFieldVisibility = normalizeLeadFieldVisibility(visibility);
-    $set.leadFieldVisibilityUpdatedAt = new Date();
-  }
-  if (customFieldLabels && typeof customFieldLabels === 'object') {
-    $set.leadCustomFieldLabels = normalizeCustomFieldLabels(customFieldLabels);
+
+  if (mode === 'merge') {
+    const existingVis = await readGigLeadFieldVisibility(gigId);
+    const existingLabels = await readGigCustomFieldLabels(gigId);
+    const incomingLabels = normalizeCustomFieldLabels(customFieldLabels);
+    // Keep previous custom titles so older leads still display their columns.
+    $set.leadCustomFieldLabels = { ...existingLabels, ...incomingLabels };
     $set.leadCustomFieldLabelsUpdatedAt = new Date();
+    if (visibility) {
+      $set.leadFieldVisibility = normalizeLeadFieldVisibility({
+        company: { ...(existingVis.company || {}), ...(visibility.company || {}) },
+        rep: { ...(existingVis.rep || {}), ...(visibility.rep || {}) },
+      });
+      $set.leadFieldVisibilityUpdatedAt = new Date();
+    }
+  } else {
+    if (visibility) {
+      $set.leadFieldVisibility = normalizeLeadFieldVisibility(visibility);
+      $set.leadFieldVisibilityUpdatedAt = new Date();
+    }
+    if (customFieldLabels && typeof customFieldLabels === 'object') {
+      $set.leadCustomFieldLabels = normalizeCustomFieldLabels(customFieldLabels);
+      $set.leadCustomFieldLabelsUpdatedAt = new Date();
+    }
   }
+
   await Gig.findByIdAndUpdate(gigId, { $set }, { new: false });
 }
 
@@ -1663,9 +1719,12 @@ router.post('/analyze', upload.single('file'), async (req, res) => {
 
     const gigId = req.body?.gigId || req.query?.gigId;
     const savedMapping = await readGigImportMapping(gigId);
+    const savedCustomFieldLabels = await readGigCustomFieldLabels(gigId);
+    const savedVisibility = await readGigLeadFieldVisibility(gigId);
     if (savedMapping) {
       suggestedMapping = mergeHeaderMappings(suggestedMapping, savedMapping);
     }
+    const schemaDiff = computeSchemaDiff(headers, savedMapping, savedCustomFieldLabels);
 
     return res.json({
       success: true,
@@ -1674,6 +1733,9 @@ router.post('/analyze', upload.single('file'), async (req, res) => {
         sampleRows,
         suggestedMapping,
         savedMapping: savedMapping || null,
+        savedCustomFieldLabels,
+        savedVisibility,
+        schemaDiff,
         fields: HARX_IMPORT_FIELDS,
         meta: {
           fileName: file.originalname,
@@ -1817,7 +1879,18 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
               ? JSON.parse(req.body.visibility)
               : req.body.visibility;
         }
-        await saveGigImportMapping(gigId, headerMapping, visibility, extraColumnLabels);
+        const schemaMode =
+          String(req.body?.schemaMode || req.query?.schemaMode || 'replace').toLowerCase() ===
+          'merge'
+            ? 'merge'
+            : 'replace';
+        await saveGigImportMapping(
+          gigId,
+          headerMapping,
+          visibility,
+          extraColumnLabels,
+          schemaMode
+        );
       } catch (persistErr) {
         console.warn('⚠️ Failed to persist lead import mapping:', persistErr?.message || persistErr);
       }
