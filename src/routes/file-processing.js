@@ -5,7 +5,7 @@ const mongoose = require('mongoose');
 const { Gig } = require('../models/Gig');
 const router = express.Router();
 
-/** HARX lead fields exposed in the column-mapping UI. */
+/** HARX lead fields exposed in the column-mapping UI (no Stage/Pipeline). */
 const HARX_IMPORT_FIELDS = [
   'Deal_Name',
   'First_Name',
@@ -16,8 +16,6 @@ const HARX_IMPORT_FIELDS = [
   'Postal_Code',
   'City',
   'Date_of_Birth',
-  'Stage',
-  'Pipeline',
 ];
 
 const INDEX_KEY_TO_HARX = {
@@ -31,8 +29,6 @@ const INDEX_KEY_TO_HARX = {
   postalCode: 'Postal_Code',
   city: 'City',
   dateOfBirth: 'Date_of_Birth',
-  stage: 'Stage',
-  pipeline: 'Pipeline',
 };
 
 const HARX_TO_INDEX_KEY = {
@@ -45,9 +41,34 @@ const HARX_TO_INDEX_KEY = {
   Postal_Code: 'postalCode',
   City: 'city',
   Date_of_Birth: 'dateOfBirth',
-  Stage: 'stage',
-  Pipeline: 'pipeline',
 };
+
+function defaultLeadFieldVisibility() {
+  const company = {};
+  const rep = {};
+  for (const field of HARX_IMPORT_FIELDS) {
+    company[field] = true;
+    rep[field] = true;
+  }
+  return { company, rep };
+}
+
+function normalizeLeadFieldVisibility(raw) {
+  const defaults = defaultLeadFieldVisibility();
+  const company = { ...defaults.company };
+  const rep = { ...defaults.rep };
+  if (raw && typeof raw === 'object') {
+    for (const field of HARX_IMPORT_FIELDS) {
+      if (raw.company && typeof raw.company[field] === 'boolean') {
+        company[field] = raw.company[field];
+      }
+      if (raw.rep && typeof raw.rep[field] === 'boolean') {
+        rep[field] = raw.rep[field];
+      }
+    }
+  }
+  return { company, rep };
+}
 
 function emptyIndexMapping() {
   return {
@@ -159,7 +180,15 @@ async function readGigImportMapping(gigId) {
     : null;
 }
 
-async function saveGigImportMapping(gigId, headerMapping) {
+async function readGigLeadFieldVisibility(gigId) {
+  if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) {
+    return defaultLeadFieldVisibility();
+  }
+  const gig = await Gig.findById(gigId).select('leadFieldVisibility').lean();
+  return normalizeLeadFieldVisibility(gig?.leadFieldVisibility);
+}
+
+async function saveGigImportMapping(gigId, headerMapping, visibility = null) {
   if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return;
   const cleaned = {};
   for (const [header, field] of Object.entries(headerMapping || {})) {
@@ -168,11 +197,15 @@ async function saveGigImportMapping(gigId, headerMapping) {
     if (!HARX_IMPORT_FIELDS.includes(value)) continue;
     cleaned[header] = value;
   }
-  await Gig.findByIdAndUpdate(
-    gigId,
-    { $set: { leadImportMapping: cleaned, leadImportMappingUpdatedAt: new Date() } },
-    { new: false }
-  );
+  const $set = {
+    leadImportMapping: cleaned,
+    leadImportMappingUpdatedAt: new Date(),
+  };
+  if (visibility) {
+    $set.leadFieldVisibility = normalizeLeadFieldVisibility(visibility);
+    $set.leadFieldVisibilityUpdatedAt = new Date();
+  }
+  await Gig.findByIdAndUpdate(gigId, { $set }, { new: false });
 }
 
 function fileToCsvContent(file) {
@@ -450,7 +483,12 @@ async function processFileWithOpenAI(fileContent, fileType) {
 /**
  * Fonction pour traiter directement via CSV sans OpenAI - Version optimisée avec détection automatique
  */
-async function processFileDirectlyFromCSV(fileContent, lines, columnMappingOverride = null) {
+async function processFileDirectlyFromCSV(
+  fileContent,
+  lines,
+  columnMappingOverride = null,
+  extraHeaders = []
+) {
   console.log('🔄 Processing file directly from CSV (bypassing OpenAI)');
   console.log(`📊 Total lines: ${lines.length} (${lines.length - 1} data rows)`);
 
@@ -466,6 +504,11 @@ async function processFileDirectlyFromCSV(fileContent, lines, columnMappingOverr
     columnMapping = await detectColumnStructure(lines[0], sampleDataLine);
   }
   console.log('🎯 Final column structure:', columnMapping);
+
+  const headers = parseCsvLine(lines[0] || '').map((h, i) => h || `Column_${i + 1}`);
+  const extras = Array.isArray(extraHeaders)
+    ? extraHeaders.map((h) => String(h || '').trim()).filter(Boolean)
+    : [];
 
   const allLeads = [];
   const totalRows = lines.length - 1;
@@ -494,7 +537,7 @@ async function processFileDirectlyFromCSV(fileContent, lines, columnMappingOverr
 
     // Process batch synchronously for maximum speed
     for (let i = startIndex; i < endIndex; i++) {
-      const lead = parseLeadFromCSVRowDynamic(lines[i], i, columnMapping);
+      const lead = parseLeadFromCSVRowDynamic(lines[i], i, columnMapping, headers, extras);
       if (lead) {
         batchLeads.push(lead);
       }
@@ -966,34 +1009,19 @@ async function detectColumnStructure(headerLine, sampleDataLine = null) {
 /**
  * Fonction pour parser une ligne CSV avec mapping dynamique
  */
-function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
+function parseLeadFromCSVRowDynamic(
+  rowData,
+  rowIndex,
+  columnMapping,
+  headers = [],
+  extraHeaders = []
+) {
   try {
     if (!rowData || rowData.trim() === '' || !columnMapping) {
       return null;
     }
 
-    // Parse CSV row
-    const columns = [];
-    let current = '';
-    let inQuotes = false;
-
-    for (let i = 0; i < rowData.length; i++) {
-      const char = rowData[i];
-      if (char === '"') {
-        if (inQuotes && i + 1 < rowData.length && rowData[i + 1] === '"') {
-          current += '"';
-          i++;
-        } else {
-          inQuotes = !inQuotes;
-        }
-      } else if (char === ',' && !inQuotes) {
-        columns.push(current.trim().replace(/^"|"$/g, ''));
-        current = '';
-      } else {
-        current += char;
-      }
-    }
-    columns.push(current.trim().replace(/^"|"$/g, ''));
+    const columns = parseCsvLine(rowData);
 
     // Debug: Show raw columns for first few rows
     if (rowIndex <= 3) {
@@ -1100,6 +1128,17 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
       }
     }
 
+    const customFields = {};
+    if (Array.isArray(extraHeaders) && extraHeaders.length && Array.isArray(headers)) {
+      for (const header of extraHeaders) {
+        const idx = headers.indexOf(header);
+        if (idx < 0) continue;
+        const value = columns[idx];
+        if (value === undefined || value === null || String(value).trim() === '') continue;
+        customFields[header] = String(value).trim();
+      }
+    }
+
     const lead = {
       Last_Activity_Time: null,
       Deal_Name: finalDealName,
@@ -1119,7 +1158,8 @@ function parseLeadFromCSVRowDynamic(rowData, rowIndex, columnMapping) {
       City: city,
       Date_of_Birth: dateOfBirth,
       First_Name: firstName,
-      Last_Name: lastName
+      Last_Name: lastName,
+      ...(Object.keys(customFields).length ? { customFields } : {}),
     };
 
     return lead;
@@ -1615,16 +1655,28 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
     }
 
     const mappedFields = Object.values(headerMapping || {}).filter(Boolean);
-    const hasIdentity = mappedFields.includes('Phone') || mappedFields.includes('Email_1');
-    const hasName =
-      mappedFields.includes('Deal_Name') ||
-      mappedFields.includes('First_Name') ||
-      mappedFields.includes('Last_Name');
-    if (!hasIdentity || !hasName) {
+    const requiredScalars = [
+      'Email_1',
+      'Phone',
+      'Address',
+      'Postal_Code',
+      'City',
+      'Date_of_Birth',
+    ];
+    const missingScalars = requiredScalars.filter((field) => !mappedFields.includes(field));
+    const hasFullName = mappedFields.includes('Deal_Name');
+    const hasSplitName =
+      mappedFields.includes('First_Name') && mappedFields.includes('Last_Name');
+    const hasName = hasFullName || hasSplitName;
+    if (missingScalars.length > 0 || !hasName) {
       return res.status(400).json({
         success: false,
         error:
-          'Mapping incomplete: map at least Phone or Email, and a name field (Deal_Name / First_Name / Last_Name).',
+          'Mapping incomplete: require Email, Phone, Address, Postal_Code, City, Date_of_Birth, and either Deal_Name (full name) or First_Name + Last_Name.',
+        missing: {
+          scalars: missingScalars,
+          name: !hasName,
+        },
       });
     }
 
@@ -1636,12 +1688,45 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
 
     const headers = parseCsvLine(lines[0]).map((h, i) => h || `Column_${i + 1}`);
     const indexMapping = headerMappingToIndexMapping(headers, headerMapping);
-    const result = await processFileDirectlyFromCSV(fileContent, lines, indexMapping);
+
+    let extraColumns = [];
+    try {
+      extraColumns =
+        typeof req.body?.extraColumns === 'string'
+          ? JSON.parse(req.body.extraColumns)
+          : req.body?.extraColumns || [];
+    } catch {
+      extraColumns = [];
+    }
+    if (!Array.isArray(extraColumns)) extraColumns = [];
+    // Only keep headers that exist and are not already mapped to a HARX field
+    const mappedHeaders = new Set(
+      Object.entries(headerMapping || {})
+        .filter(([, field]) => Boolean(field))
+        .map(([header]) => header)
+    );
+    extraColumns = extraColumns
+      .map((h) => String(h || '').trim())
+      .filter((h) => h && headers.includes(h) && !mappedHeaders.has(h));
+
+    const result = await processFileDirectlyFromCSV(
+      fileContent,
+      lines,
+      indexMapping,
+      extraColumns
+    );
 
     const gigId = req.body?.gigId || req.query?.gigId;
     if (gigId) {
       try {
-        await saveGigImportMapping(gigId, headerMapping);
+        let visibility = null;
+        if (req.body?.visibility) {
+          visibility =
+            typeof req.body.visibility === 'string'
+              ? JSON.parse(req.body.visibility)
+              : req.body.visibility;
+        }
+        await saveGigImportMapping(gigId, headerMapping, visibility);
       } catch (persistErr) {
         console.warn('⚠️ Failed to persist lead import mapping:', persistErr?.message || persistErr);
       }
@@ -1675,7 +1760,15 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
 router.get('/mapping/:gigId', async (req, res) => {
   try {
     const mapping = await readGigImportMapping(req.params.gigId);
-    return res.json({ success: true, data: { mapping: mapping || {} } });
+    const visibility = await readGigLeadFieldVisibility(req.params.gigId);
+    return res.json({
+      success: true,
+      data: {
+        mapping: mapping || {},
+        visibility,
+        fields: HARX_IMPORT_FIELDS,
+      },
+    });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message || 'Failed to load mapping' });
   }
@@ -1683,15 +1776,39 @@ router.get('/mapping/:gigId', async (req, res) => {
 
 /**
  * PUT /api/file-processing/mapping/:gigId
- * Body: { mapping: { [header]: HarxField } }
+ * Body: { mapping?: { [header]: HarxField }, visibility?: { company, rep } }
  */
 router.put('/mapping/:gigId', async (req, res) => {
   try {
     const mapping = req.body?.mapping || {};
-    await saveGigImportMapping(req.params.gigId, mapping);
-    return res.json({ success: true, data: { mapping } });
+    const visibility = req.body?.visibility || null;
+    await saveGigImportMapping(req.params.gigId, mapping, visibility);
+    const savedVisibility = await readGigLeadFieldVisibility(req.params.gigId);
+    return res.json({
+      success: true,
+      data: { mapping, visibility: savedVisibility },
+    });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message || 'Failed to save mapping' });
+  }
+});
+
+/**
+ * GET /api/file-processing/visibility/:gigId
+ * Used by company UI and REP front to know which lead fields to show.
+ */
+router.get('/visibility/:gigId', async (req, res) => {
+  try {
+    const visibility = await readGigLeadFieldVisibility(req.params.gigId);
+    return res.json({
+      success: true,
+      data: { visibility, fields: HARX_IMPORT_FIELDS },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to load field visibility',
+    });
   }
 });
 

@@ -539,11 +539,34 @@ exports.createLeadsBulk = async (req, res) => {
     const fallbackGigId = gigId || (req.gig ? req.gig._id : undefined);
     const fallbackUserId = req.user ? req.user._id : undefined;
 
-    const normalizedLeads = leads.map((lead) => ({
-      ...lead,
-      gigId: lead.gigId || fallbackGigId,
-      userId: lead.userId || fallbackUserId,
-    }));
+    const normalizeCustomFields = (raw) => {
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return undefined;
+      const entries =
+        raw instanceof Map
+          ? Array.from(raw.entries())
+          : Object.entries(raw);
+      const cleaned = {};
+      for (const [key, value] of entries) {
+        const k = String(key || '').trim();
+        if (!k || value == null) continue;
+        const v = String(value).trim();
+        if (!v) continue;
+        cleaned[k] = v;
+      }
+      return Object.keys(cleaned).length ? cleaned : undefined;
+    };
+
+    const normalizedLeads = leads.map((lead) => {
+      const customFields = normalizeCustomFields(lead.customFields);
+      const next = {
+        ...lead,
+        gigId: lead.gigId || fallbackGigId,
+        userId: lead.userId || fallbackUserId,
+      };
+      if (customFields) next.customFields = customFields;
+      else delete next.customFields;
+      return next;
+    });
 
     const normalize = (value) =>
       typeof value === 'string' ? value.trim().toLowerCase() : '';

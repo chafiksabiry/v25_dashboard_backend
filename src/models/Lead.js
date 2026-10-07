@@ -205,6 +205,16 @@ const leadSchema = new mongoose.Schema({
   },
   nextFollowUpNotifiedAt: { type: Date, default: null },
 
+  /**
+   * Extra file columns chosen by the company during import mapping.
+   * Keys = original file header names, values = cell strings.
+   */
+  customFields: {
+    type: Map,
+    of: String,
+    default: undefined,
+  },
+
   /** Soft-delete: hidden from company and REP lists, kept in the database. */
   archived: { type: Boolean, default: false, index: true },
   archivedAt: { type: Date, default: null },
