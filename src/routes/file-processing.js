@@ -1,7 +1,216 @@
 const express = require('express');
 const multer = require('multer');
 const XLSX = require('xlsx');
+const mongoose = require('mongoose');
+const { Gig } = require('../models/Gig');
 const router = express.Router();
+
+/** HARX lead fields exposed in the column-mapping UI. */
+const HARX_IMPORT_FIELDS = [
+  'Deal_Name',
+  'First_Name',
+  'Last_Name',
+  'Email_1',
+  'Phone',
+  'Address',
+  'Postal_Code',
+  'City',
+  'Date_of_Birth',
+  'Stage',
+  'Pipeline',
+];
+
+const INDEX_KEY_TO_HARX = {
+  email: 'Email_1',
+  phone: 'Phone',
+  leadName: 'Deal_Name',
+  dealName: 'Deal_Name',
+  firstName: 'First_Name',
+  lastName: 'Last_Name',
+  address: 'Address',
+  postalCode: 'Postal_Code',
+  city: 'City',
+  dateOfBirth: 'Date_of_Birth',
+  stage: 'Stage',
+  pipeline: 'Pipeline',
+};
+
+const HARX_TO_INDEX_KEY = {
+  Email_1: 'email',
+  Phone: 'phone',
+  Deal_Name: 'leadName',
+  First_Name: 'firstName',
+  Last_Name: 'lastName',
+  Address: 'address',
+  Postal_Code: 'postalCode',
+  City: 'city',
+  Date_of_Birth: 'dateOfBirth',
+  Stage: 'stage',
+  Pipeline: 'pipeline',
+};
+
+function emptyIndexMapping() {
+  return {
+    email: -1,
+    phone: -1,
+    leadName: -1,
+    dealName: -1,
+    firstName: -1,
+    lastName: -1,
+    accountName: -1,
+    contactName: -1,
+    stage: -1,
+    pipeline: -1,
+    projectTag: -1,
+    amount: -1,
+    probability: -1,
+    address: -1,
+    postalCode: -1,
+    city: -1,
+    dateOfBirth: -1,
+  };
+}
+
+function parseCsvLine(line) {
+  const columns = [];
+  let current = '';
+  let inQuotes = false;
+  const text = String(line || '');
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (inQuotes && i + 1 < text.length && text[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      columns.push(current.trim().replace(/^"|"$/g, ''));
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  columns.push(current.trim().replace(/^"|"$/g, ''));
+  return columns;
+}
+
+function indexMappingToHeaderMapping(headers, indexMapping) {
+  const headerMapping = {};
+  headers.forEach((header, index) => {
+    headerMapping[header] = '';
+    for (const [indexKey, harxField] of Object.entries(INDEX_KEY_TO_HARX)) {
+      if (Number(indexMapping?.[indexKey]) === index) {
+        // Prefer explicit Deal_Name over duplicate leadName/dealName
+        if (headerMapping[header] && headerMapping[header] !== harxField) continue;
+        headerMapping[header] = harxField;
+      }
+    }
+  });
+  return headerMapping;
+}
+
+function headerMappingToIndexMapping(headers, headerMapping) {
+  const mapping = emptyIndexMapping();
+  const usedFields = new Set();
+
+  headers.forEach((header, index) => {
+    const field = String(headerMapping?.[header] || '').trim();
+    if (!field || field === 'ignore' || !HARX_TO_INDEX_KEY[field]) return;
+    if (usedFields.has(field)) return;
+    usedFields.add(field);
+    const indexKey = HARX_TO_INDEX_KEY[field];
+    mapping[indexKey] = index;
+    if (field === 'Deal_Name') {
+      mapping.dealName = index;
+      mapping.leadName = index;
+    }
+  });
+
+  return mapping;
+}
+
+function mergeHeaderMappings(suggested, saved) {
+  const merged = { ...(suggested || {}) };
+  if (!saved || typeof saved !== 'object') return merged;
+
+  for (const [header, field] of Object.entries(saved)) {
+    if (!(header in merged)) continue;
+    const value = String(field || '').trim();
+    if (!value) continue;
+    if (!HARX_IMPORT_FIELDS.includes(value)) continue;
+    // Avoid assigning the same HARX field twice
+    const alreadyUsed = Object.entries(merged).some(
+      ([h, f]) => h !== header && f === value
+    );
+    if (alreadyUsed) continue;
+    merged[header] = value;
+  }
+  return merged;
+}
+
+async function readGigImportMapping(gigId) {
+  if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return null;
+  const gig = await Gig.findById(gigId).select('leadImportMapping').lean();
+  return gig?.leadImportMapping && typeof gig.leadImportMapping === 'object'
+    ? gig.leadImportMapping
+    : null;
+}
+
+async function saveGigImportMapping(gigId, headerMapping) {
+  if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return;
+  const cleaned = {};
+  for (const [header, field] of Object.entries(headerMapping || {})) {
+    const value = String(field || '').trim();
+    if (!value) continue;
+    if (!HARX_IMPORT_FIELDS.includes(value)) continue;
+    cleaned[header] = value;
+  }
+  await Gig.findByIdAndUpdate(
+    gigId,
+    { $set: { leadImportMapping: cleaned, leadImportMappingUpdatedAt: new Date() } },
+    { new: false }
+  );
+}
+
+function fileToCsvContent(file) {
+  const fileExtension = file.originalname.toLowerCase().split('.').pop();
+  let fileContent = '';
+  let fileType = '';
+
+  if (fileExtension === 'xlsx' || fileExtension === 'xls') {
+    fileType = 'Excel';
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const worksheet = workbook.Sheets[sheetName];
+    const jsonData = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+    const rawHeaders = jsonData[0] || [];
+    const headers = rawHeaders.map((h, i) => {
+      const label = String(h ?? '').trim();
+      return label || `Column_${i + 1}`;
+    });
+    const dataRows = jsonData.slice(1);
+    fileContent = [
+      headers.map((h) => `"${String(h).replace(/"/g, '""')}"`).join(','),
+      ...dataRows.map((row) =>
+        (row || []).map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`).join(',')
+      ),
+    ].join('\n');
+  } else if (fileExtension === 'csv') {
+    fileType = 'CSV';
+    fileContent = file.buffer.toString('utf8');
+  } else {
+    const err = new Error(
+      `Unsupported file format: .${fileExtension}. Please upload a CSV, XLS, or XLSX file.`
+    );
+    err.statusCode = 400;
+    throw err;
+  }
+
+  return { fileContent: cleanEmailAddresses(fileContent), fileType };
+}
 
 /**
  * Endpoint de test pour vérifier la communication frontend-backend
@@ -241,20 +450,21 @@ async function processFileWithOpenAI(fileContent, fileType) {
 /**
  * Fonction pour traiter directement via CSV sans OpenAI - Version optimisée avec détection automatique
  */
-async function processFileDirectlyFromCSV(fileContent, lines) {
+async function processFileDirectlyFromCSV(fileContent, lines, columnMappingOverride = null) {
   console.log('🔄 Processing file directly from CSV (bypassing OpenAI)');
   console.log(`📊 Total lines: ${lines.length} (${lines.length - 1} data rows)`);
 
-  // Detect column structure automatically from header using OpenAI + fallback
-  console.log('🔍 Analyzing header structure with AI assistance...');
-  // Détecter la structure des colonnes avec header + optionnellement ligne de données
-  const sampleDataLine = lines.length > 1 ? lines[1] : null;
-  console.log('📊 Analyzing structure with:', {
-    header: lines[0].substring(0, 100) + '...',
-    sampleData: sampleDataLine ? sampleDataLine.substring(0, 100) + '...' : 'none'
-  });
-
-  const columnMapping = await detectColumnStructure(lines[0], sampleDataLine);
+  let columnMapping = columnMappingOverride;
+  if (!columnMapping) {
+    // Detect column structure automatically from header using OpenAI + fallback
+    console.log('🔍 Analyzing header structure with AI assistance...');
+    const sampleDataLine = lines.length > 1 ? lines[1] : null;
+    console.log('📊 Analyzing structure with:', {
+      header: lines[0].substring(0, 100) + '...',
+      sampleData: sampleDataLine ? sampleDataLine.substring(0, 100) + '...' : 'none'
+    });
+    columnMapping = await detectColumnStructure(lines[0], sampleDataLine);
+  }
   console.log('🎯 Final column structure:', columnMapping);
 
   const allLeads = [];
@@ -1315,5 +1525,174 @@ function tryRecoverIncompleteJSON(content, expectedLeads) {
     return null;
   }
 }
+
+/**
+ * Analyze a file for column mapping (no lead import yet).
+ * POST /api/file-processing/analyze
+ * Optional form field: gigId — merges saved mapping for that gig.
+ */
+router.post('/analyze', upload.single('file'), async (req, res) => {
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    const { fileContent, fileType } = fileToCsvContent(file);
+    const lines = fileContent.split(/\r?\n/).filter((line, idx) => idx === 0 || line.trim() !== '');
+    if (!lines.length) {
+      return res.status(400).json({ success: false, error: 'Empty file' });
+    }
+
+    const headers = parseCsvLine(lines[0]).map((h, i) => h || `Column_${i + 1}`);
+    const sampleRows = [];
+    for (let i = 1; i < Math.min(lines.length, 6); i++) {
+      const cols = parseCsvLine(lines[i]);
+      const row = {};
+      headers.forEach((header, index) => {
+        row[header] = cols[index] ?? '';
+      });
+      sampleRows.push(row);
+    }
+
+    const indexMapping = createBasicMapping(lines[0]);
+    let suggestedMapping = indexMappingToHeaderMapping(headers, indexMapping);
+
+    const gigId = req.body?.gigId || req.query?.gigId;
+    const savedMapping = await readGigImportMapping(gigId);
+    if (savedMapping) {
+      suggestedMapping = mergeHeaderMappings(suggestedMapping, savedMapping);
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        headers,
+        sampleRows,
+        suggestedMapping,
+        savedMapping: savedMapping || null,
+        fields: HARX_IMPORT_FIELDS,
+        meta: {
+          fileName: file.originalname,
+          fileSize: file.size,
+          fileType,
+          totalRows: Math.max(0, lines.length - 1),
+        },
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error analyzing file:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message || 'Error analyzing file',
+    });
+  }
+});
+
+/**
+ * Apply a confirmed column mapping and return normalized leads.
+ * POST /api/file-processing/apply-mapping
+ * Form fields: file, mapping (JSON string header→HARX field), gigId (optional, persists mapping)
+ */
+router.post('/apply-mapping', upload.single('file'), async (req, res) => {
+  req.setTimeout(30000);
+  res.setTimeout(30000);
+
+  try {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ success: false, error: 'No file uploaded' });
+    }
+
+    let headerMapping = {};
+    try {
+      headerMapping =
+        typeof req.body?.mapping === 'string'
+          ? JSON.parse(req.body.mapping)
+          : req.body?.mapping || {};
+    } catch {
+      return res.status(400).json({ success: false, error: 'Invalid mapping JSON' });
+    }
+
+    const mappedFields = Object.values(headerMapping || {}).filter(Boolean);
+    const hasIdentity = mappedFields.includes('Phone') || mappedFields.includes('Email_1');
+    const hasName =
+      mappedFields.includes('Deal_Name') ||
+      mappedFields.includes('First_Name') ||
+      mappedFields.includes('Last_Name');
+    if (!hasIdentity || !hasName) {
+      return res.status(400).json({
+        success: false,
+        error:
+          'Mapping incomplete: map at least Phone or Email, and a name field (Deal_Name / First_Name / Last_Name).',
+      });
+    }
+
+    const { fileContent, fileType } = fileToCsvContent(file);
+    const lines = fileContent.split(/\r?\n/).filter((line, idx) => idx === 0 || line.trim() !== '');
+    if (!lines.length) {
+      return res.status(400).json({ success: false, error: 'Empty file' });
+    }
+
+    const headers = parseCsvLine(lines[0]).map((h, i) => h || `Column_${i + 1}`);
+    const indexMapping = headerMappingToIndexMapping(headers, headerMapping);
+    const result = await processFileDirectlyFromCSV(fileContent, lines, indexMapping);
+
+    const gigId = req.body?.gigId || req.query?.gigId;
+    if (gigId) {
+      try {
+        await saveGigImportMapping(gigId, headerMapping);
+      } catch (persistErr) {
+        console.warn('⚠️ Failed to persist lead import mapping:', persistErr?.message || persistErr);
+      }
+    }
+
+    return res.json({
+      success: true,
+      data: result,
+      meta: {
+        timestamp: new Date().toISOString(),
+        fileInfo: {
+          name: file.originalname,
+          size: file.size,
+          type: fileType,
+        },
+        mapping: headerMapping,
+      },
+    });
+  } catch (error) {
+    console.error('❌ Error applying mapping:', error);
+    return res.status(error.statusCode || 500).json({
+      success: false,
+      error: error.message || 'Error applying mapping',
+    });
+  }
+});
+
+/**
+ * GET /api/file-processing/mapping/:gigId
+ */
+router.get('/mapping/:gigId', async (req, res) => {
+  try {
+    const mapping = await readGigImportMapping(req.params.gigId);
+    return res.json({ success: true, data: { mapping: mapping || {} } });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || 'Failed to load mapping' });
+  }
+});
+
+/**
+ * PUT /api/file-processing/mapping/:gigId
+ * Body: { mapping: { [header]: HarxField } }
+ */
+router.put('/mapping/:gigId', async (req, res) => {
+  try {
+    const mapping = req.body?.mapping || {};
+    await saveGigImportMapping(req.params.gigId, mapping);
+    return res.json({ success: true, data: { mapping } });
+  } catch (error) {
+    return res.status(500).json({ success: false, error: error.message || 'Failed to save mapping' });
+  }
+});
 
 module.exports = router;
