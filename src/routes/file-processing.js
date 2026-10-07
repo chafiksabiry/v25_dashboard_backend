@@ -1829,4 +1829,160 @@ router.get('/visibility/:gigId', async (req, res) => {
   }
 });
 
+const HARX_FIELD_LABELS_FR = {
+  Deal_Name: 'Nom du prospect',
+  First_Name: 'Prénom',
+  Last_Name: 'Nom',
+  Email_1: 'Email',
+  Phone: 'Téléphone',
+  Address: 'Adresse',
+  Postal_Code: 'Code postal',
+  City: 'Ville',
+  Date_of_Birth: 'Date de naissance',
+};
+
+/**
+ * GET /api/file-processing/script-variables/:gigId
+ * Catalog of contact variables for call scripts (mapped HARX + customFields).
+ */
+router.get('/script-variables/:gigId', async (req, res) => {
+  try {
+    const gigId = req.params.gigId;
+    if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) {
+      return res.status(400).json({ success: false, error: 'Invalid gigId' });
+    }
+
+    const mapping = (await readGigImportMapping(gigId)) || {};
+    const visibility = await readGigLeadFieldVisibility(gigId);
+
+    const mappedHarx = new Set(
+      Object.values(mapping)
+        .map((v) => String(v || '').trim())
+        .filter((v) => HARX_IMPORT_FIELDS.includes(v))
+    );
+
+    // Always expose core identity fields even if mapping empty (manual leads / defaults)
+    for (const field of HARX_IMPORT_FIELDS) {
+      mappedHarx.add(field);
+    }
+
+    const { Lead } = require('../models/Lead');
+    const sampleLead = await Lead.findOne({
+      gigId,
+      archived: { $ne: true },
+    })
+      .sort({ createdAt: -1 })
+      .select([...HARX_IMPORT_FIELDS, 'customFields'].join(' '))
+      .lean();
+
+    const customKeys = new Set();
+    if (sampleLead?.customFields) {
+      const entries =
+        sampleLead.customFields instanceof Map
+          ? Array.from(sampleLead.customFields.keys())
+          : Object.keys(sampleLead.customFields);
+      for (const k of entries) {
+        const key = String(k || '').trim();
+        if (key) customKeys.add(key);
+      }
+    }
+    // Also scan a few recent leads for custom field keys
+    const recent = await Lead.find({ gigId, archived: { $ne: true } })
+      .sort({ createdAt: -1 })
+      .limit(25)
+      .select('customFields')
+      .lean();
+    for (const lead of recent) {
+      if (!lead?.customFields) continue;
+      const entries =
+        lead.customFields instanceof Map
+          ? Array.from(lead.customFields.keys())
+          : Object.keys(lead.customFields);
+      for (const k of entries) {
+        const key = String(k || '').trim();
+        if (key) customKeys.add(key);
+      }
+    }
+
+    const readExample = (field) => {
+      if (!sampleLead) return '';
+      const v = sampleLead[field];
+      return v == null ? '' : String(v).trim();
+    };
+    const readCustomExample = (header) => {
+      if (!sampleLead?.customFields) return '';
+      const map = sampleLead.customFields;
+      const v =
+        map instanceof Map ? map.get(header) : map[header];
+      return v == null ? '' : String(v).trim();
+    };
+
+    const variables = [];
+
+    for (const field of HARX_IMPORT_FIELDS) {
+      if (!mappedHarx.has(field)) continue;
+      const visibleCompany = visibility?.company?.[field] !== false;
+      const visibleRep = visibility?.rep?.[field] !== false;
+      variables.push({
+        key: field,
+        token: `{{${field}}}`,
+        label: HARX_FIELD_LABELS_FR[field] || field,
+        source: 'harx',
+        example: readExample(field),
+        visibleCompany,
+        visibleRep,
+      });
+    }
+
+    for (const header of Array.from(customKeys).sort((a, b) => a.localeCompare(b))) {
+      variables.push({
+        key: `custom.${header}`,
+        token: `{{custom.${header}}}`,
+        label: header,
+        source: 'custom',
+        example: readCustomExample(header),
+        visibleCompany: true,
+        visibleRep: true,
+      });
+    }
+
+    // Agent / company tokens (not from lead file, but used in scripts)
+    variables.push(
+      {
+        key: 'repName',
+        token: '{{repName}}',
+        label: 'Votre nom (REP)',
+        source: 'system',
+        example: '',
+        visibleCompany: true,
+        visibleRep: true,
+      },
+      {
+        key: 'companyName',
+        token: '{{companyName}}',
+        label: "Nom de l'entreprise (vendeur)",
+        source: 'system',
+        example: '',
+        visibleCompany: true,
+        visibleRep: true,
+      }
+    );
+
+    return res.json({
+      success: true,
+      data: {
+        gigId,
+        variables,
+        fields: HARX_IMPORT_FIELDS,
+        visibility,
+      },
+    });
+  } catch (error) {
+    return res.status(500).json({
+      success: false,
+      error: error.message || 'Failed to load script variables',
+    });
+  }
+});
+
 module.exports = router;
