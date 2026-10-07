@@ -192,6 +192,20 @@ async function readGigImportMapping(gigId) {
     : null;
 }
 
+async function readGigCustomFieldLabels(gigId) {
+  if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return {};
+  const gig = await Gig.findById(gigId).select('leadCustomFieldLabels').lean();
+  const raw = gig?.leadCustomFieldLabels;
+  if (!raw || typeof raw !== 'object') return {};
+  const out = {};
+  for (const [header, label] of Object.entries(raw)) {
+    const h = String(header || '').trim();
+    const l = String(label || '').trim();
+    if (h && l) out[h] = l;
+  }
+  return out;
+}
+
 async function readGigLeadFieldVisibility(gigId) {
   if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) {
     return defaultLeadFieldVisibility();
@@ -200,7 +214,23 @@ async function readGigLeadFieldVisibility(gigId) {
   return normalizeLeadFieldVisibility(gig?.leadFieldVisibility);
 }
 
-async function saveGigImportMapping(gigId, headerMapping, visibility = null) {
+function normalizeCustomFieldLabels(raw) {
+  const out = {};
+  if (!raw || typeof raw !== 'object') return out;
+  for (const [header, label] of Object.entries(raw)) {
+    const h = String(header || '').trim();
+    const l = String(label || '').trim();
+    if (h && l) out[h] = l;
+  }
+  return out;
+}
+
+async function saveGigImportMapping(
+  gigId,
+  headerMapping,
+  visibility = null,
+  customFieldLabels = null
+) {
   if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) return;
   const cleaned = {};
   for (const [header, field] of Object.entries(headerMapping || {})) {
@@ -216,6 +246,10 @@ async function saveGigImportMapping(gigId, headerMapping, visibility = null) {
   if (visibility) {
     $set.leadFieldVisibility = normalizeLeadFieldVisibility(visibility);
     $set.leadFieldVisibilityUpdatedAt = new Date();
+  }
+  if (customFieldLabels && typeof customFieldLabels === 'object') {
+    $set.leadCustomFieldLabels = normalizeCustomFieldLabels(customFieldLabels);
+    $set.leadCustomFieldLabelsUpdatedAt = new Date();
   }
   await Gig.findByIdAndUpdate(gigId, { $set }, { new: false });
 }
@@ -1734,9 +1768,37 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
         .filter(([, field]) => Boolean(field))
         .map(([header]) => header)
     );
-    extraColumns = extraColumns
-      .map((h) => String(h || '').trim())
-      .filter((h) => h && headers.includes(h) && !mappedHeaders.has(h));
+    // Accept ["Header"] or [{ header, label }] — values still keyed by source header.
+    const parsedExtras = extraColumns
+      .map((entry) => {
+        if (entry && typeof entry === 'object') {
+          return {
+            header: String(entry.header || entry.field || entry.key || '').trim(),
+            label: String(entry.label || entry.title || entry.displayTitle || '').trim(),
+          };
+        }
+        return { header: String(entry || '').trim(), label: '' };
+      })
+      .filter((e) => e.header && headers.includes(e.header) && !mappedHeaders.has(e.header));
+
+    extraColumns = parsedExtras.map((e) => e.header);
+
+    let extraColumnLabels = {};
+    try {
+      const rawLabels =
+        typeof req.body?.extraColumnLabels === 'string'
+          ? JSON.parse(req.body.extraColumnLabels)
+          : req.body?.extraColumnLabels || {};
+      if (rawLabels && typeof rawLabels === 'object') {
+        extraColumnLabels = normalizeCustomFieldLabels(rawLabels);
+      }
+    } catch {
+      extraColumnLabels = {};
+    }
+    for (const e of parsedExtras) {
+      if (e.label) extraColumnLabels[e.header] = e.label;
+      else if (!extraColumnLabels[e.header]) extraColumnLabels[e.header] = e.header;
+    }
 
     const result = await processFileDirectlyFromCSV(
       fileContent,
@@ -1755,7 +1817,7 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
               ? JSON.parse(req.body.visibility)
               : req.body.visibility;
         }
-        await saveGigImportMapping(gigId, headerMapping, visibility);
+        await saveGigImportMapping(gigId, headerMapping, visibility, extraColumnLabels);
       } catch (persistErr) {
         console.warn('⚠️ Failed to persist lead import mapping:', persistErr?.message || persistErr);
       }
@@ -1790,11 +1852,13 @@ router.get('/mapping/:gigId', async (req, res) => {
   try {
     const mapping = await readGigImportMapping(req.params.gigId);
     const visibility = await readGigLeadFieldVisibility(req.params.gigId);
+    const customFieldLabels = await readGigCustomFieldLabels(req.params.gigId);
     return res.json({
       success: true,
       data: {
         mapping: mapping || {},
         visibility,
+        customFieldLabels,
         fields: HARX_IMPORT_FIELDS,
       },
     });
@@ -1805,17 +1869,19 @@ router.get('/mapping/:gigId', async (req, res) => {
 
 /**
  * PUT /api/file-processing/mapping/:gigId
- * Body: { mapping?: { [header]: HarxField }, visibility?: { company, rep } }
+ * Body: { mapping?, visibility?, customFieldLabels?: { [header]: displayTitle } }
  */
 router.put('/mapping/:gigId', async (req, res) => {
   try {
     const mapping = req.body?.mapping || {};
     const visibility = req.body?.visibility || null;
-    await saveGigImportMapping(req.params.gigId, mapping, visibility);
+    const customFieldLabels = req.body?.customFieldLabels || null;
+    await saveGigImportMapping(req.params.gigId, mapping, visibility, customFieldLabels);
     const savedVisibility = await readGigLeadFieldVisibility(req.params.gigId);
+    const savedLabels = await readGigCustomFieldLabels(req.params.gigId);
     return res.json({
       success: true,
-      data: { mapping, visibility: savedVisibility },
+      data: { mapping, visibility: savedVisibility, customFieldLabels: savedLabels },
     });
   } catch (error) {
     return res.status(500).json({ success: false, error: error.message || 'Failed to save mapping' });
@@ -1866,6 +1932,7 @@ router.get('/script-variables/:gigId', async (req, res) => {
 
     const mapping = (await readGigImportMapping(gigId)) || {};
     const visibility = await readGigLeadFieldVisibility(gigId);
+    const customFieldLabels = await readGigCustomFieldLabels(gigId);
 
     const mappedHarx = new Set(
       Object.values(mapping)
@@ -1947,14 +2014,15 @@ router.get('/script-variables/:gigId', async (req, res) => {
     }
 
     for (const header of Array.from(customKeys).sort((a, b) => a.localeCompare(b))) {
+      const visKey = `custom.${header}`;
       variables.push({
-        key: `custom.${header}`,
-        token: `{{custom.${header}}}`,
-        label: header,
+        key: visKey,
+        token: `{{${visKey}}}`,
+        label: customFieldLabels[header] || header,
         source: 'custom',
         example: readCustomExample(header),
-        visibleCompany: true,
-        visibleRep: true,
+        visibleCompany: visibility?.company?.[visKey] !== false,
+        visibleRep: visibility?.rep?.[visKey] !== false,
       });
     }
 
