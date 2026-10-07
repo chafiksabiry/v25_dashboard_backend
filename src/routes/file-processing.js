@@ -66,6 +66,18 @@ function normalizeLeadFieldVisibility(raw) {
         rep[field] = raw.rep[field];
       }
     }
+    // Persist visibility for saved custom/extra columns (custom.<header>)
+    for (const audience of ['company', 'rep']) {
+      const src = raw[audience];
+      if (!src || typeof src !== 'object') continue;
+      const target = audience === 'company' ? company : rep;
+      for (const [key, val] of Object.entries(src)) {
+        if (typeof val !== 'boolean') continue;
+        if (String(key).startsWith('custom.')) {
+          target[key] = val;
+        }
+      }
+    }
   }
   return { company, rep };
 }
