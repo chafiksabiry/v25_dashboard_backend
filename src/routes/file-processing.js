@@ -964,6 +964,23 @@ function createBasicMapping(headerLine) {
       mapping.city = i;
     } else if ((col.includes('naissance') || col.includes('birth') || col.includes('date_de_naissance') || col.includes('dob')) && mapping.dateOfBirth === -1) {
       mapping.dateOfBirth = i;
+    } else if (
+      mapping.leadName === -1 &&
+      (
+        col.includes('nom prenom') ||
+        col.includes('nom_prenom') ||
+        col.includes('nomprenom') ||
+        col.includes('full name') ||
+        col.includes('fullname') ||
+        col.includes('full_name') ||
+        col === 'name' ||
+        col === 'nom complet' ||
+        col.includes('nomcomplet')
+      )
+    ) {
+      // Combined full-name column → Deal_Name (no need for First/Last)
+      mapping.leadName = i;
+      mapping.dealName = i;
     } else if ((col.includes('prenom') || col.includes('first_name') || col.includes('firstname')) && mapping.firstName === -1) {
       mapping.firstName = i;
     } else if ((col.includes('nom') || col.includes('last_name') || col.includes('lastname') || col.includes('surname')) && mapping.lastName === -1 && !col.includes('prenom')) {
