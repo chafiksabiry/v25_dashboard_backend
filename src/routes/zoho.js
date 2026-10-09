@@ -24,6 +24,8 @@ const {
   getPipelines,
   archiveEmail,
   syncAllLeads,
+  listZohoFields,
+  saveZohoFieldMapping,
   getZohoConfigById,
   getAllZohoConfigs
 } = require("../controllers/zoho");
@@ -50,7 +52,7 @@ router.get('/auth', async (req, res) => {
           authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
           tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
           apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
-          scope: scope || 'ZohoCRM.modules.ALL',
+          scope: scope || 'ZohoCRM.modules.ALL,ZohoCRM.settings.fields.READ',
       } : null;
 
       const generatedAuthUrl = await zohoService.getAuthUrl(customConfig);
@@ -76,7 +78,7 @@ router.get('/callback', async (req, res) => {
           authUrl: authUrl || 'https://accounts.zoho.com/oauth/v2/auth',
           tokenUrl: tokenUrl || 'https://accounts.zoho.com/oauth/v2/token',
           apiBaseUrl: apiBaseUrl || 'https://www.zohoapis.com/crm/v2.1',
-          scope: scope || 'ZohoCRM.modules.ALL'
+          scope: scope || 'ZohoCRM.modules.ALL,ZohoCRM.settings.fields.READ'
       } : null;
 
       const tokenData = await zohoService.getAccessToken(code, customConfig);
@@ -152,6 +154,8 @@ router.get('/leads', zohoTokenMiddleware, requireZohoConfig, getLeads);
 router.post('/leads', zohoTokenMiddleware, requireZohoConfig, saveLeads);
 router.put('/leads/:id', zohoTokenMiddleware, requireZohoConfig, updateLead);
 router.post('/leads/sync-all', zohoTokenMiddleware, requireZohoConfig, syncAllLeads);
+router.get('/fields', zohoTokenMiddleware, requireZohoConfig, listZohoFields);
+router.put('/field-mapping', zohoTokenMiddleware, requireZohoConfig, saveZohoFieldMapping);
 router.get('/deals', zohoTokenMiddleware, requireZohoConfig, getDeals);
 router.get('/deals/count', zohoTokenMiddleware, requireZohoConfig, getDealsCount);
 router.get('/leads-by-pipeline', zohoTokenMiddleware, requireZohoConfig, getLeadsByPipeline);

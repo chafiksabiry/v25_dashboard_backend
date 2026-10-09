@@ -2,6 +2,15 @@ const axios = require("axios");
 const { config } = require("../config/env");
 const LeadModel = require("../models/Lead");
 const ZohoConfig = require("../models/ZohoConfig");
+const {
+  normalizeMapping,
+  mappingIsUsable,
+  normalizeModule,
+  fieldsQuery,
+  applyZohoRecord,
+  toZohoPayload,
+  zohoApiRoot,
+} = require("../services/zohoFieldMapping");
 const mongoose = require("mongoose");
 
 const refreshToken = async (app) => {
@@ -976,13 +985,13 @@ const updateLead = async (req, res) => {
     }
 
     const data = await executeWithTokenRefresh(req, res, async (token) => {
-      // Préparer les données pour Zoho CRM
-      const zohoData = {
-        data: [leadData],
-      };
+      const mapping = normalizeMapping(req.zohoConfig?.fieldMapping);
+      const payload = toZohoPayload(leadData, mapping);
+      const moduleName = mappingIsUsable(mapping) ? normalizeModule(req.zohoConfig?.crmModule) : 'Deals';
+      const zohoData = { data: [payload] };
 
       const response = await axios.put(
-        `${config.ZOHO_API_URL}/Deals/${id}`,
+        `${config.ZOHO_API_URL}/${moduleName}/${id}`,
         zohoData,
         {
           headers: {
@@ -1586,6 +1595,16 @@ const syncAllLeads = async (req, res) => {
     let totalFailed = 0;
     let failedLeads = [];
 
+    const storedMapping = normalizeMapping(req.zohoConfig?.fieldMapping);
+    const useCompanyMapping = mappingIsUsable(storedMapping);
+    const crmModule = normalizeModule(req.zohoConfig?.crmModule);
+    const extraFields = Array.isArray(req.zohoConfig?.zohoExtraFields)
+      ? req.zohoConfig.zohoExtraFields
+      : [];
+    const mappedFields = useCompanyMapping
+      ? fieldsQuery(storedMapping, extraFields)
+      : "Deal_Name,First_Name,Last_Name,Stage,Pipeline,Email_1,Phone,Address,Postal_Code,City,Date_of_Birth,Last_Activity_Time,Activity_Tag";
+
     // Récupérer et sauvegarder les leads page par page
     const result = await (async () => {
       let currentPage = 1;
@@ -1599,9 +1618,9 @@ const syncAllLeads = async (req, res) => {
       while (hasMoreRecords) {
         console.log(`\nTraitement de la page ${currentPage}...`);
 
-        const baseURL = "https://www.zohoapis.com/crm/v2.1/Deals";
+        const baseURL = `${zohoApiRoot()}/crm/v2.1/${useCompanyMapping ? crmModule : "Deals"}`;
         const params = {
-          fields: "Deal_Name,First_Name,Last_Name,Stage,Pipeline,Email_1,Phone,Address,Postal_Code,City,Date_of_Birth,Last_Activity_Time,Activity_Tag",
+          fields: mappedFields,
           page: currentPage,
           per_page: pageSize
         };
@@ -1625,39 +1644,57 @@ const syncAllLeads = async (req, res) => {
             const batch = response.data.data.slice(i, i + batchSize);
             const batchPromises = batch.map(async (lead, index) => {
               try {
-                const leadData = {
-                  userId: userId,
-                  gigId: gigId,
-                  companyId: req.body?.companyId,
-                  Deal_Name: lead.Deal_Name,
-                  First_Name: lead.First_Name || '',
-                  Last_Name: lead.Last_Name || '',
-                  Address: lead.Address || '',
-                  Postal_Code: lead.Postal_Code || '',
-                  City: lead.City || '',
-                  Date_of_Birth: lead.Date_of_Birth || '',
-                  Stage: lead.Stage,
-                  Phone: lead.Phone,
-                  Pipeline: lead.Pipeline,
-                  Last_Activity_Time: lead.Last_Activity_Time,
-                  Activity_Tag: lead.Activity_Tag,
-                  id: lead.id,
-                  refreshToken: req.headers.authorization?.split(" ")[1]
-                };
+                const companyId = req.body?.companyId;
+                let leadData;
 
-                if (!lead.Email_1 && lead.Deal_Name && lead.Deal_Name.includes('@')) {
-                  leadData.Email_1 = lead.Deal_Name;
-                  const nameParts = lead.Deal_Name.split('@')[0];
-                  if (nameParts) {
-                    leadData.Deal_Name = nameParts.replace(/[._]/g, ' ');
+                if (useCompanyMapping) {
+                  const applied = applyZohoRecord(lead, storedMapping);
+                  leadData = {
+                    userId,
+                    gigId,
+                    companyId,
+                    id: lead.id,
+                    ...applied.lead,
+                  };
+                  if (Object.keys(applied.customFields).length > 0) {
+                    leadData.customFields = applied.customFields;
                   }
                 } else {
-                  leadData.Email_1 = lead.Email_1 || 'no-email@placeholder.com';
+                  leadData = {
+                    userId: userId,
+                    gigId: gigId,
+                    companyId,
+                    Deal_Name: lead.Deal_Name,
+                    First_Name: lead.First_Name || '',
+                    Last_Name: lead.Last_Name || '',
+                    Address: lead.Address || '',
+                    Postal_Code: lead.Postal_Code || '',
+                    City: lead.City || '',
+                    Date_of_Birth: lead.Date_of_Birth || '',
+                    Stage: lead.Stage,
+                    Phone: lead.Phone,
+                    Pipeline: lead.Pipeline,
+                    Last_Activity_Time: lead.Last_Activity_Time,
+                    Activity_Tag: lead.Activity_Tag,
+                    id: lead.id,
+                  };
+
+                  if (!lead.Email_1 && lead.Deal_Name && lead.Deal_Name.includes('@')) {
+                    leadData.Email_1 = lead.Deal_Name;
+                    const nameParts = lead.Deal_Name.split('@')[0];
+                    if (nameParts) {
+                      leadData.Deal_Name = nameParts.replace(/[._]/g, ' ');
+                    }
+                  } else if (lead.Email_1) {
+                    leadData.Email_1 = lead.Email_1;
+                  }
                 }
 
-                // Créer un nouveau lead sans vérifier l'existence
-                const newLead = new LeadModel.Lead(leadData);
-                const savedLead = await newLead.save();
+                const savedLead = await LeadModel.Lead.findOneAndUpdate(
+                  { id: String(lead.id), gigId, companyId },
+                  { $set: leadData },
+                  { upsert: true, new: true, setDefaultsOnInsert: true }
+                );
 
                 // Vérification simple après sauvegarde
                 const verifiedLead = await LeadModel.Lead.findOne({ _id: savedLead._id });
@@ -1874,6 +1911,85 @@ const getAllZohoConfigs = async (req, res) => {
   }
 };
 
+const listZohoFields = async (req, res) => {
+  const moduleName = normalizeModule(req.query.module || req.zohoConfig?.crmModule);
+  const accessToken = req.zohoAccessToken;
+
+  try {
+    const response = await axios.get(`${zohoApiRoot()}/crm/v2/settings/fields`, {
+      params: { module: moduleName },
+      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+      timeout: 30000,
+    });
+
+    const fields = (response.data?.fields || [])
+      .filter((field) => field?.api_name && !String(field.api_name).startsWith('$'))
+      .map((field) => ({
+        apiName: field.api_name,
+        label: field.field_label || field.display_label || field.api_name,
+        dataType: field.data_type || '',
+      }));
+
+    return res.json({
+      success: true,
+      module: moduleName,
+      fields,
+      mapping: normalizeMapping(req.zohoConfig?.fieldMapping),
+      mappingSaved: mappingIsUsable(normalizeMapping(req.zohoConfig?.fieldMapping)),
+      savedModule: normalizeModule(req.zohoConfig?.crmModule),
+      extraFields: req.zohoConfig?.zohoExtraFields || [],
+    });
+  } catch (error) {
+    const zohoError = error.response?.data;
+    const scopeMissing = zohoError?.code === 'OAUTH_SCOPE_MISMATCH' || error.response?.status === 401;
+    return res.status(scopeMissing ? 403 : 502).json({
+      success: false,
+      code: scopeMissing ? 'ZOHO_FIELDS_SCOPE' : 'ZOHO_FIELDS_FAILED',
+      message: scopeMissing
+        ? "Zoho n'autorise pas encore la lecture des champs. Reconnectez Zoho pour accorder l'accès aux champs."
+        : (zohoError?.message || error.message || 'Impossible de lire les champs Zoho'),
+    });
+  }
+};
+
+const saveZohoFieldMapping = async (req, res) => {
+  const mapping = normalizeMapping(req.body?.mapping);
+  if (!mappingIsUsable(mapping)) {
+    return res.status(400).json({
+      success: false,
+      message: "Indiquez le nom (ou prénom et nom), l'e-mail et le téléphone.",
+    });
+  }
+
+  const moduleName = normalizeModule(req.body?.module);
+  const extraFields = Array.isArray(req.body?.extraFields)
+    ? [...new Set(req.body.extraFields.map((name) => String(name).trim()).filter(Boolean))].slice(0, 50)
+    : [];
+
+  const updated = await ZohoConfig.findOneAndUpdate(
+    { userId: req.userId },
+    {
+      $set: {
+        crmModule: moduleName,
+        fieldMapping: mapping,
+        zohoExtraFields: extraFields,
+      },
+    },
+    { new: true, sort: { updated_at: -1 } }
+  );
+
+  if (!updated) {
+    return res.status(404).json({ success: false, message: 'Configuration Zoho non trouvée' });
+  }
+
+  return res.json({
+    success: true,
+    module: updated.crmModule,
+    mapping: normalizeMapping(updated.fieldMapping),
+    extraFields: updated.zohoExtraFields || [],
+  });
+};
+
 module.exports = {
   refreshToken,
   getLeads,
@@ -1898,6 +2014,8 @@ module.exports = {
   archiveEmail,
   getSalesIQPortalName,
   syncAllLeads,
+  listZohoFields,
+  saveZohoFieldMapping,
   getZohoConfigById,
   getAllZohoConfigs
 };

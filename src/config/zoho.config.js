@@ -5,6 +5,6 @@ module.exports = {
     authUrl: process.env.ZOHO_AUTH_URL || 'https://accounts.zoho.com/oauth/v2/auth',
     tokenUrl: process.env.ZOHO_TOKEN_URL || 'https://accounts.zoho.com/oauth/v2/token',
     apiBaseUrl: process.env.ZOHO_API_URL || 'https://www.zohoapis.com/crm/v2.1',
-    scope: process.env.ZOHO_SCOPE || 'ZohoCRM.modules.ALL',
+    scope: process.env.ZOHO_SCOPE || 'ZohoCRM.modules.ALL,ZohoCRM.settings.fields.READ',
     salesIQPortal: process.env.ZOHO_SALESIQ_PORTAL
 }; 
