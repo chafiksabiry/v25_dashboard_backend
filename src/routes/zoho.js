@@ -35,6 +35,28 @@ const { zohoTokenMiddleware, requireZohoConfig } = require('../middleware/zohoTo
 
 const router = express.Router();
 
+const COMPANY_APP_URL = (process.env.HARX_COMPANY_APP_URL || 'https://harx.ai/company').replace(/\/$/, '');
+const COMPANY_API_URL = (
+  process.env.COMPANY_API_URL ||
+  'https://v25searchcompanywizardbackend-production.up.railway.app/api'
+).replace(/\/$/, '');
+const REQUIRED_ONBOARDING_STEP_IDS = [1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13];
+
+async function isOnboardingComplete(userId) {
+  try {
+    const response = await axios.get(
+      `${COMPANY_API_URL}/onboarding/companies/${encodeURIComponent(userId)}/onboardingProgress`,
+      { timeout: 8000, validateStatus: () => true }
+    );
+    if (response.status !== 200) return false;
+    const completed = new Set((response.data?.completedSteps || []).map(Number));
+    return REQUIRED_ONBOARDING_STEP_IDS.every((stepId) => completed.has(stepId));
+  } catch (error) {
+    console.error('Onboarding check failed:', error.message);
+    return false;
+  }
+}
+
 // Configuration et authentification
 router.post('/configure', configureZohoCRM);
 router.post('/token', getTokenWithCredentials);
@@ -125,7 +147,11 @@ router.get('/auth/callback', async (req, res) => {
       { upsert: true }
     );
 
-    return res.redirect(`https://v25-preprod.harx.ai/app11?session=someGeneratedSessionId`);
+    const onboardingComplete = await isOnboardingComplete(finalUserId);
+    const target = onboardingComplete
+      ? `${COMPANY_APP_URL}#/dashboard/leads`
+      : `${COMPANY_APP_URL}#/orchestrator?startStep=5`;
+    return res.redirect(target);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
