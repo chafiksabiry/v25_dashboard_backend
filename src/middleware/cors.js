@@ -54,7 +54,9 @@ const corsOptions = {
     'X-Requested-With',
     'Cache-Control',
     'x-user-id',
-    'x-agent-id'
+    'x-agent-id',
+    'X-Zoho-Token',
+    'X-Zoho-Api-Domain'
   ],
   exposedHeaders: ['Content-Length', 'X-Requested-With'],
   preflightContinue: false,
