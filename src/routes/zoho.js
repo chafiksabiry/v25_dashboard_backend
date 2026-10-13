@@ -136,7 +136,8 @@ router.get('/auth/callback', async (req, res) => {
     }
 
     const browserAccountsServer = accountsServer
-      || (location ? `https://accounts.zoho.${location}` : '');
+      || zohoService.accountsBaseFromLocation(location)
+      || '';
     const tokenData = await zohoService.getAccessToken(code, null, browserAccountsServer);
 
     const payload = {

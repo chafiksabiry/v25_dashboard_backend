@@ -11,10 +11,33 @@ const ZOHO_ACCOUNTS_TOKEN_URLS = [
     'https://accounts.zoho.sa/oauth/v2/token',
 ];
 
+/** Zoho `location=us` is accounts.zoho.com. accounts.zoho.us does not exist. */
+const ZOHO_LOCATION_ACCOUNTS = {
+    us: 'https://accounts.zoho.com',
+    eu: 'https://accounts.zoho.eu',
+    in: 'https://accounts.zoho.in',
+    au: 'https://accounts.zoho.com.au',
+    jp: 'https://accounts.zoho.jp',
+    ca: 'https://accounts.zohocloud.ca',
+    sa: 'https://accounts.zoho.sa',
+    cn: 'https://accounts.zoho.com.cn',
+};
+
+function accountsBaseFromLocation(location) {
+    const key = String(location || '').trim().toLowerCase();
+    return ZOHO_LOCATION_ACCOUNTS[key] || null;
+}
+
 function tokenUrlFromAccountsServer(accountsServer) {
     if (!accountsServer) return null;
-    const base = String(accountsServer).replace(/\/+$/, '');
+    let base = String(accountsServer).trim().replace(/\/+$/, '');
     if (!base.startsWith('http')) return null;
+    try {
+        const host = new URL(base).hostname;
+        if (host === 'accounts.zoho.us') base = 'https://accounts.zoho.com';
+    } catch {
+        return null;
+    }
     if (base.includes('/oauth/')) return base;
     return `${base}/oauth/v2/token`;
 }
@@ -220,4 +243,6 @@ class ZohoService {
     }
 }
 
-module.exports = new ZohoService(); 
+const zohoService = new ZohoService();
+zohoService.accountsBaseFromLocation = accountsBaseFromLocation;
+module.exports = zohoService; 
