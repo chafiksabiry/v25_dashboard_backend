@@ -117,7 +117,7 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-    const { code, state, userId } = req.query;
+    const { code, state, userId, accountsServer, location } = req.query;
     
     // Check if code is present
     if (!code) {
@@ -135,25 +135,34 @@ router.get('/auth/callback', async (req, res) => {
       });
     }
 
-    const tokenData = await zohoService.getAccessToken(code);
+    const browserAccountsServer = accountsServer
+      || (location ? `https://accounts.zoho.${location}` : '');
+    const tokenData = await zohoService.getAccessToken(code, null, browserAccountsServer);
 
-    await ZohoConfig.findOneAndUpdate(
-      { userId: finalUserId },
-      {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token,
-        expires_in: tokenData.expires_in,
-        ...(tokenData.api_domain ? { api_domain: tokenData.api_domain } : {}),
-        updated_at: new Date(),
-      },
-      { upsert: true }
-    );
+    const payload = {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in,
+      api_domain: tokenData.api_domain || '',
+      accounts_server: browserAccountsServer || '',
+    };
+
+    const wantsJson = String(req.get('accept') || '').includes('application/json');
+    if (wantsJson) {
+      return res.json(payload);
+    }
 
     const onboardingComplete = await isOnboardingComplete(finalUserId);
-    const target = onboardingComplete
-      ? `${COMPANY_APP_URL}#/dashboard/leads`
-      : `${COMPANY_APP_URL}#/orchestrator?startStep=5`;
-    return res.redirect(target);
+    const hashPath = onboardingComplete ? '/dashboard/leads' : '/orchestrator?startStep=5';
+    const base = COMPANY_APP_URL.replace(/\/$/, '').replace(/#.*$/, '');
+    const params = new URLSearchParams({
+      zoho_access_token: payload.access_token,
+      zoho_refresh_token: payload.refresh_token || '',
+      zoho_expires_in: String(payload.expires_in || 3600),
+      zoho_api_domain: payload.api_domain,
+      zoho_accounts_server: payload.accounts_server,
+    });
+    return res.redirect(`${base}?${params.toString()}#${hashPath}`);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -162,18 +171,29 @@ router.get('/auth/callback', async (req, res) => {
 
 router.post('/refresh-token', async (req, res) => {
   try {
-      const { refreshToken } = req.body;
+      const { refreshToken, accountsServer, apiDomain } = req.body;
       if (!refreshToken) {
           return res.status(400).json({ error: 'Refresh token is required' });
       }
 
-      const tokenData = await zohoService.refreshToken(refreshToken);
-      res.json({ 
+      const tokenData = await zohoService.refreshAccessToken({
+          refreshToken,
+          accountsServer,
+          apiDomain,
+          clientId: zohoService.config.clientId,
+          clientSecret: zohoService.config.clientSecret,
+          fallbackTokenUrl: zohoService.config.tokenUrl,
+      });
+      res.json({
           message: 'Token refreshed successfully',
-          accessToken: tokenData.access_token
+          access_token: tokenData.access_token,
+          refresh_token: tokenData.refresh_token || refreshToken,
+          expires_in: tokenData.expires_in,
+          api_domain: tokenData.api_domain || apiDomain || '',
+          accessToken: tokenData.access_token,
       });
   } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: error.zohoError || error.message });
   }
 });
 

@@ -1,12 +1,28 @@
-const axios = require('axios');
 const ZohoConfig = require('../models/ZohoConfig');
 const { config } = require('../config/env');
+const zohoService = require('../services/zoho.service');
 /**
  * Middleware pour gérer automatiquement le refresh des tokens Zoho
  * Vérifie si le token est expiré et le rafraîchit automatiquement
  */
 const zohoTokenMiddleware = async (req, res, next) => {
   try {
+    // The Zoho session belongs to this browser, not to the database record.
+    const browserToken = String(req.get('x-zoho-token') || '').trim();
+    if (browserToken) {
+      const authHeader = req.headers.authorization || '';
+      const raw = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
+      const [gigId, userId] = raw.split(':');
+      req.zohoAccessToken = browserToken;
+      req.zohoConfig = {
+        api_domain: String(req.get('x-zoho-api-domain') || '').trim(),
+        crmModule: 'Deals',
+      };
+      req.userId = userId || '';
+      req.gigId = gigId || '';
+      return next();
+    }
+
     // Extraire userId de l'Authorization header (format: gigId:userId)
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
@@ -44,44 +60,40 @@ const zohoTokenMiddleware = async (req, res, next) => {
       console.log(`Token expiré pour l'utilisateur ${userId}, rafraîchissement en cours...`);
       
       try {
-        // Rafraîchir le token
-        const response = await axios.post(config.ZOHO_TOKEN_URL, null, {
-          params: {
-            refresh_token: zohoConfig.refresh_token,
-            client_id: zohoConfig.client_id,
-            client_secret: zohoConfig.client_secret,
-            grant_type: 'refresh_token'
-          }
+        const tokenData = await zohoService.refreshAccessToken({
+          refreshToken: zohoConfig.refresh_token,
+          clientId: zohoConfig.client_id,
+          clientSecret: zohoConfig.client_secret,
+          apiDomain: zohoConfig.api_domain,
+          fallbackClientId: config.ZOHO_CLIENT_ID,
+          fallbackClientSecret: config.ZOHO_CLIENT_SECRET,
+          fallbackTokenUrl: config.ZOHO_TOKEN_URL,
         });
 
-        if (!response.data.access_token) {        
-          throw new Error('Token non reçu dans la réponse');
-        }
-
-        // Mettre à jour la configuration avec le nouveau token
         await ZohoConfig.findOneAndUpdate(
           { userId },
           {
-            access_token: response.data.access_token,
-            refresh_token: response.data.refresh_token || zohoConfig.refresh_token,
-            expires_in: response.data.expires_in,
-            ...(response.data.api_domain ? { api_domain: response.data.api_domain } : {}),
+            access_token: tokenData.access_token,
+            refresh_token: tokenData.refresh_token || zohoConfig.refresh_token,
+            expires_in: tokenData.expires_in,
+            client_id: tokenData.clientId || zohoConfig.client_id,
+            client_secret: tokenData.clientSecret || zohoConfig.client_secret,
+            ...(tokenData.api_domain ? { api_domain: tokenData.api_domain } : {}),
             updated_at: new Date()
           }
         );
 
         console.log(`Token rafraîchi avec succès pour l'utilisateur ${userId}`);
 
-        if (response.data.api_domain) {
-          zohoConfig.api_domain = response.data.api_domain;
+        if (tokenData.api_domain) {
+          zohoConfig.api_domain = tokenData.api_domain;
         }
-        req.zohoAccessToken = response.data.access_token;
+        req.zohoAccessToken = tokenData.access_token;
         
       } catch (refreshError) {    
-        console.error(`Erreur lors du rafraîchissement du token pour l'utilisateur ${userId}:`, refreshError.message);
-        
-        // Si le refresh token est invalide, supprimer la configuration
-        if (refreshError.response?.status === 400 && refreshError.response?.data?.error === 'invalid_grant') {
+        console.error(`Erreur lors du rafraîchissement du token pour l'utilisateur ${userId}:`, refreshError.zohoError || refreshError.message);
+
+        if (refreshError.zohoError === 'invalid_grant') {
           await ZohoConfig.deleteMany({ userId });
           return res.status(401).json({
             success: false,
@@ -92,7 +104,7 @@ const zohoTokenMiddleware = async (req, res, next) => {
         
         return res.status(500).json({
           success: false,
-          message: "Erreur lors du rafraîchissement du token"
+          message: "Erreur lors du rafraîchissement du token. Déconnectez puis reconnectez Zoho."
         });
       }
     } else {
