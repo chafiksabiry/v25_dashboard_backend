@@ -66,6 +66,35 @@ function zohoApiRoot() {
   return String(configured).replace(/\/crm\/v\d+(\.\d+)?\/?$/i, '');
 }
 
+const ZOHO_API_HOSTS = [
+  'https://www.zohoapis.eu',
+  'https://www.zohoapis.com',
+  'https://www.zohoapis.in',
+  'https://www.zohoapis.com.au',
+  'https://www.zohoapis.jp',
+  'https://www.zohoapis.ca',
+  'https://www.zohoapis.sa',
+];
+
+function zohoHostCandidates(preferred) {
+  const hosts = [];
+  const add = (value) => {
+    if (!value) return;
+    const host = String(value).replace(/\/+$/, '').replace(/\/crm\/v\d+(\.\d+)?$/i, '');
+    if (host && !hosts.includes(host)) hosts.push(host);
+  };
+  add(preferred);
+  add(zohoApiRoot());
+  ZOHO_API_HOSTS.forEach(add);
+  return hosts;
+}
+
+function isZohoWrongUrl(data) {
+  const code = data?.code || '';
+  const message = data?.message || '';
+  return code === 'INVALID_URL_PATTERN' || /url trying to access is a correct one/i.test(message);
+}
+
 function asPlain(value) {
   if (!value) return {};
   if (value instanceof Map) return Object.fromEntries(value);
@@ -180,6 +209,8 @@ module.exports = {
   CRM_MODULES,
   DEFAULT_MAPPING,
   zohoApiRoot,
+  zohoHostCandidates,
+  isZohoWrongUrl,
   normalizeMapping,
   mappingIsUsable,
   normalizeModule,

@@ -8,6 +8,8 @@ const zohoConfigSchema = new mongoose.Schema({
   client_id: { type: String, required: true },
   client_secret: { type: String, required: true },
   expires_in: { type: Number, required: true },
+  /** Zoho data-center API origin, e.g. https://www.zohoapis.eu */
+  api_domain: { type: String, default: '' },
   updated_at: { type: Date, default: Date.now, required: true },
   lastUpdated: { type: Date, default: Date.now },
   /** CRM module this company imports from. */

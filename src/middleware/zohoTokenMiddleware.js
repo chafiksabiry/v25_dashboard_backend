@@ -65,13 +65,16 @@ const zohoTokenMiddleware = async (req, res, next) => {
             access_token: response.data.access_token,
             refresh_token: response.data.refresh_token || zohoConfig.refresh_token,
             expires_in: response.data.expires_in,
+            ...(response.data.api_domain ? { api_domain: response.data.api_domain } : {}),
             updated_at: new Date()
           }
         );
 
         console.log(`Token rafraîchi avec succès pour l'utilisateur ${userId}`);
-        
-        // Ajouter le nouveau token à la requête
+
+        if (response.data.api_domain) {
+          zohoConfig.api_domain = response.data.api_domain;
+        }
         req.zohoAccessToken = response.data.access_token;
         
       } catch (refreshError) {    

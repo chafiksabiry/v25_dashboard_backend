@@ -143,6 +143,7 @@ router.get('/auth/callback', async (req, res) => {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
+        ...(tokenData.api_domain ? { api_domain: tokenData.api_domain } : {}),
         updated_at: new Date(),
       },
       { upsert: true }
@@ -245,6 +246,7 @@ router.post('/config/user/:userId/refresh-token', async (req, res) => {
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
+        ...(tokenData.api_domain ? { api_domain: tokenData.api_domain } : {}),
         updated_at: new Date(),
       }
     );
