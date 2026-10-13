@@ -7,6 +7,7 @@ const {
   mappingIsUsable,
   normalizeModule,
   fieldsQuery,
+  scalarValue,
   applyZohoRecord,
   toZohoPayload,
   zohoApiRoot,
@@ -1952,6 +1953,113 @@ const listZohoFields = async (req, res) => {
   }
 };
 
+const PREFERRED_ZOHO_COLUMNS = [
+  'Deal_Name',
+  'Full_Name',
+  'First_Name',
+  'Last_Name',
+  'Email',
+  'Email_1',
+  'Secondary_Email',
+  'Phone',
+  'Mobile',
+  'Mailing_Street',
+  'Street',
+  'Address',
+  'Mailing_Zip',
+  'Zip_Code',
+  'Postal_Code',
+  'Mailing_City',
+  'City',
+  'Date_of_Birth',
+];
+
+/** Raw CRM rows for the same column-mapping import used by a file upload. */
+const exportZohoTable = async (req, res) => {
+  res.setTimeout(120000);
+  const moduleName = normalizeModule(req.query.module || req.zohoConfig?.crmModule);
+  const accessToken = req.zohoAccessToken;
+
+  try {
+    let fieldNames = [];
+    try {
+      const fieldsResponse = await axios.get(`${zohoApiRoot()}/crm/v2/settings/fields`, {
+        params: { module: moduleName },
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+        timeout: 30000,
+      });
+      const names = (fieldsResponse.data?.fields || [])
+        .map((field) => field?.api_name)
+        .filter((name) => name && name !== 'id' && !String(name).startsWith('$'));
+      names.sort((a, b) => {
+        const ai = PREFERRED_ZOHO_COLUMNS.indexOf(a);
+        const bi = PREFERRED_ZOHO_COLUMNS.indexOf(b);
+        if (ai === -1 && bi === -1) return 0;
+        if (ai === -1) return 1;
+        if (bi === -1) return -1;
+        return ai - bi;
+      });
+      fieldNames = names.slice(0, 50);
+    } catch (fieldsError) {
+      console.warn('Zoho field catalog unavailable, listing records without a field filter:', fieldsError.message);
+    }
+
+    const rows = [];
+    const seenHeaders = new Set(fieldNames);
+    let page = 1;
+    let more = true;
+    const maxRows = 5000;
+
+    while (more && rows.length < maxRows && page <= 25) {
+      const params = { page, per_page: 200 };
+      if (fieldNames.length) params.fields = fieldNames.join(',');
+      const response = await axios.get(`${zohoApiRoot()}/crm/v2.1/${moduleName}`, {
+        params,
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+        timeout: 30000,
+        validateStatus: (status) => status === 200 || status === 204,
+      });
+
+      const records = Array.isArray(response.data?.data) ? response.data.data : [];
+      if (!records.length) break;
+
+      for (const record of records) {
+        const keys = fieldNames.length
+          ? fieldNames
+          : Object.keys(record).filter((key) => key !== 'id' && !key.startsWith('$'));
+        const row = {};
+        for (const key of keys) {
+          seenHeaders.add(key);
+          row[key] = scalarValue(record[key]);
+        }
+        rows.push(row);
+        if (rows.length >= maxRows) break;
+      }
+
+      more = Boolean(response.data?.info?.more_records);
+      page += 1;
+    }
+
+    const headers = fieldNames.length ? fieldNames : [...seenHeaders];
+    return res.json({
+      success: true,
+      data: {
+        module: moduleName,
+        headers,
+        rows,
+        total: rows.length,
+        truncated: more && rows.length >= maxRows,
+      },
+    });
+  } catch (error) {
+    const zohoError = error.response?.data;
+    return res.status(error.response?.status === 401 ? 401 : 502).json({
+      success: false,
+      message: zohoError?.message || error.message || 'Impossible de lire les enregistrements Zoho',
+    });
+  }
+};
+
 const saveZohoFieldMapping = async (req, res) => {
   const mapping = normalizeMapping(req.body?.mapping);
   if (!mappingIsUsable(mapping)) {
@@ -2015,6 +2123,7 @@ module.exports = {
   getSalesIQPortalName,
   syncAllLeads,
   listZohoFields,
+  exportZohoTable,
   saveZohoFieldMapping,
   getZohoConfigById,
   getAllZohoConfigs

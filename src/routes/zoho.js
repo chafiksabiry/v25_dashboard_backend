@@ -25,6 +25,7 @@ const {
   archiveEmail,
   syncAllLeads,
   listZohoFields,
+  exportZohoTable,
   saveZohoFieldMapping,
   getZohoConfigById,
   getAllZohoConfigs
@@ -181,6 +182,7 @@ router.post('/leads', zohoTokenMiddleware, requireZohoConfig, saveLeads);
 router.put('/leads/:id', zohoTokenMiddleware, requireZohoConfig, updateLead);
 router.post('/leads/sync-all', zohoTokenMiddleware, requireZohoConfig, syncAllLeads);
 router.get('/fields', zohoTokenMiddleware, requireZohoConfig, listZohoFields);
+router.get('/records/table', zohoTokenMiddleware, requireZohoConfig, exportZohoTable);
 router.put('/field-mapping', zohoTokenMiddleware, requireZohoConfig, saveZohoFieldMapping);
 router.get('/deals', zohoTokenMiddleware, requireZohoConfig, getDeals);
 router.get('/deals/count', zohoTokenMiddleware, requireZohoConfig, getDealsCount);

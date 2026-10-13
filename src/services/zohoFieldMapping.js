@@ -184,6 +184,7 @@ module.exports = {
   mappingIsUsable,
   normalizeModule,
   fieldsQuery,
+  scalarValue,
   applyZohoRecord,
   toZohoPayload,
 };
