@@ -2061,13 +2061,18 @@ const exportZohoTable = async (req, res) => {
     let more = true;
     const maxRows = 5000;
 
-    while (more && rows.length < maxRows && page <= 25) {
+    let pageToken = '';
+    while (more && rows.length < maxRows && page <= 50) {
+      const params = {
+        fields: fieldNames.join(','),
+        per_page: 200,
+      };
+      if (moduleName === 'Leads') params.converted = 'both';
+      if (pageToken) params.page_token = pageToken;
+      else params.page = page;
+
       const response = await axios.get(`${host}/crm/v2/${moduleName}`, {
-        params: {
-          fields: fieldNames.join(','),
-          page,
-          per_page: 200,
-        },
+        params,
         headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
         timeout: 30000,
         validateStatus: (status) => status === 200 || status === 204,
@@ -2091,7 +2096,9 @@ const exportZohoTable = async (req, res) => {
         if (rows.length >= maxRows) break;
       }
 
-      more = Boolean(response.data?.info?.more_records);
+      const info = response.data?.info || {};
+      pageToken = info.next_page_token || '';
+      more = Boolean(info.more_records);
       page += 1;
     }
 

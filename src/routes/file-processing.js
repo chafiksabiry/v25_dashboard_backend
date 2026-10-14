@@ -529,30 +529,39 @@ router.post('/process', upload.single('file'), async (req, res) => {
 /**
  * Fonction pour nettoyer les adresses email
  */
-function cleanEmailAddresses(content) {
-  const lines = content.split('\n');
-  const cleanedLines = lines.map((line, index) => {
-    if (index === 0) {
-      return line; // Header row
-    }
+/** One CSV record per row. Quoted fields may contain commas and line breaks. */
+function splitCsvRecords(content) {
+  const records = [];
+  let current = '';
+  let inQuotes = false;
+  const text = String(content || '').replace(/^\uFEFF/, '');
 
-    const columns = line.split(',');
-    if (columns.length >= 24) {
-      const emailColumn = columns[23];
-      if (emailColumn && emailColumn.includes('@')) {
-        const cleanedEmail = emailColumn.replace(/^Nor\s+/, '').trim();
-        columns[23] = cleanedEmail;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === '"') {
+      if (inQuotes && text[i + 1] === '"') {
+        current += '""';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+        current += char;
       }
+    } else if ((char === '\n' || char === '\r') && !inQuotes) {
+      if (char === '\r' && text[i + 1] === '\n') i++;
+      records.push(current);
+      current = '';
+    } else {
+      current += char;
     }
+  }
+  if (current.length) records.push(current);
+  return records.filter((line, idx) => idx === 0 || line.trim() !== '');
+}
 
-    return columns.join(',');
-  });
-
-  const cleanedContent = cleanedLines.join('\n');
-  const generalCleaned = cleanedContent.replace(/Nor\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, '$1');
-  const finalCleaned = generalCleaned.replace(/(?:Prefix|Label|Tag)\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, '$1');
-
-  return finalCleaned;
+function cleanEmailAddresses(content) {
+  return String(content || '')
+    .replace(/Nor\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, '$1')
+    .replace(/(?:Prefix|Label|Tag)\s+([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})/g, '$1');
 }
 
 /**
@@ -1698,7 +1707,7 @@ router.post('/analyze', upload.single('file'), async (req, res) => {
     }
 
     const { fileContent, fileType } = fileToCsvContent(file);
-    const lines = fileContent.split(/\r?\n/).filter((line, idx) => idx === 0 || line.trim() !== '');
+    const lines = splitCsvRecords(fileContent);
     if (!lines.length) {
       return res.status(400).json({ success: false, error: 'Empty file' });
     }
@@ -1806,7 +1815,7 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
     }
 
     const { fileContent, fileType } = fileToCsvContent(file);
-    const lines = fileContent.split(/\r?\n/).filter((line, idx) => idx === 0 || line.trim() !== '');
+    const lines = splitCsvRecords(fileContent);
     if (!lines.length) {
       return res.status(400).json({ success: false, error: 'Empty file' });
     }

@@ -571,10 +571,27 @@ exports.createLeadsBulk = async (req, res) => {
     const normalize = (value) =>
       typeof value === 'string' ? value.trim().toLowerCase() : '';
 
-    const isPlaceholderEmail = (email) =>
-      !email || email === 'no-email@placeholder.com';
-    const isPlaceholderPhone = (phone) =>
-      !phone || phone === 'no-phone@placeholder.com';
+    const isPlaceholderEmail = (email) => {
+      const value = normalize(email);
+      return !value || value === 'no-email@placeholder.com';
+    };
+    const isPlaceholderPhone = (phone) => {
+      const value = normalize(phone).replace(/^\+/, '');
+      return !value || value === 'no-phone@placeholder.com';
+    };
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const sanitizeLeadForInsert = (lead) => {
+      const next = { ...lead };
+      const email = typeof next.Email_1 === 'string' ? next.Email_1.trim() : '';
+      if (!email || !emailPattern.test(email)) {
+        next.Email_1 = 'no-email@placeholder.com';
+      }
+      if (next.Last_Activity_Time) {
+        const parsed = new Date(next.Last_Activity_Time);
+        next.Last_Activity_Time = Number.isNaN(parsed.getTime()) ? null : parsed;
+      }
+      return next;
+    };
 
     const seenEmails = new Set();
     const seenPhones = new Set();
@@ -722,7 +739,25 @@ exports.createLeadsBulk = async (req, res) => {
       });
     }
 
-    const createdLeads = await Lead.insertMany(leadsToCreate, { ordered: false });
+    const createdLeads = [];
+    const chunkSize = 200;
+    for (let offset = 0; offset < leadsToCreate.length; offset += chunkSize) {
+      const chunk = leadsToCreate.slice(offset, offset + chunkSize).map(sanitizeLeadForInsert);
+      try {
+        const inserted = await Lead.insertMany(chunk, { ordered: false });
+        createdLeads.push(...inserted);
+      } catch (insertError) {
+        const partial = Array.isArray(insertError.insertedDocs) ? insertError.insertedDocs : [];
+        createdLeads.push(...partial);
+        console.error(
+          `❌ Bulk chunk ${offset}-${offset + chunk.length} saved ${partial.length}/${chunk.length}:`,
+          insertError.message
+        );
+        if (!partial.length && createdLeads.length === 0 && offset === 0) {
+          throw insertError;
+        }
+      }
+    }
 
     console.log(`✅ Successfully created ${createdLeads.length} leads (skipped ${skipped} duplicates, updated ${updated})`);
 
