@@ -1820,19 +1820,43 @@ exports.getCompanyRepCoverage = async (req, res) => {
     const callMatch = {
       companyId: companyObjId,
       lead: { $ne: null },
-      userId: { $ne: null }
+      $or: [{ agent: { $ne: null } }, { userId: { $ne: null } }]
     };
     if (gigObjId) callMatch.gigId = gigObjId;
 
     const repAgg = await Call.aggregate([
       { $match: callMatch },
-      // Collapse multiple calls of the same (rep, lead) pair down to one
-      { $group: { _id: { userId: "$userId", lead: "$lead" } } },
-      { $group: { _id: "$_id.userId", current: { $sum: 1 } } },
+      {
+        $group: {
+          _id: {
+            rep: { $ifNull: ["$agent", "$userId"] },
+            lead: "$lead"
+          },
+          agentId: { $first: "$agent" },
+          userId: { $first: "$userId" }
+        }
+      },
+      {
+        $group: {
+          _id: "$_id.rep",
+          current: { $sum: 1 },
+          agentId: { $first: "$agentId" },
+          userId: { $first: "$userId" }
+        }
+      },
+      {
+        $lookup: {
+          from: "agents",
+          localField: "agentId",
+          foreignField: "_id",
+          as: "agent"
+        }
+      },
+      { $unwind: { path: "$agent", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: "users",
-          localField: "_id",
+          localField: "userId",
           foreignField: "_id",
           as: "user"
         }
@@ -1841,9 +1865,35 @@ exports.getCompanyRepCoverage = async (req, res) => {
       {
         $project: {
           _id: 0,
-          userId: "$_id",
+          userId: { $ifNull: ["$userId", "$_id"] },
           current: 1,
-          name: { $ifNull: ["$user.name", "Rep"] }
+          name: {
+            $let: {
+              vars: {
+                agentName: {
+                  $trim: {
+                    input: { $ifNull: ["$agent.personalInfo.name", ""] }
+                  }
+                },
+                userName: {
+                  $trim: { input: { $ifNull: ["$user.name", ""] } }
+                }
+              },
+              in: {
+                $cond: [
+                  { $gt: [{ $strLenCP: "$$agentName" }, 0] },
+                  "$$agentName",
+                  {
+                    $cond: [
+                      { $gt: [{ $strLenCP: "$$userName" }, 0] },
+                      "$$userName",
+                      "Rep"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
         }
       },
       { $sort: { current: -1 } },
