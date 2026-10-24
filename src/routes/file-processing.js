@@ -1043,12 +1043,14 @@ function createBasicMapping(headerLine) {
 
   // Recherche par nom de colonne
   for (let i = 0; i < columns.length; i++) {
-    const col = columns[i].toLowerCase();
+    // Sans accents (« Prénom » → « prenom », « Téléphone » → « telephone »),
+    // sinon « prénom » contient « nom » et finit mappé sur le nom de famille.
+    const col = columns[i].normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
 
     if (col.includes('deal_name') || col === 'deal_name') {
       mapping.leadName = i; // Deal_Name → leadName
       console.log(`🎯 Found Deal_Name at column ${i}`);
-    } else if (col.includes('email') && mapping.email === -1) {
+    } else if ((col.includes('email') || col.includes('e-mail') || col.includes('courriel') || col === 'mail') && mapping.email === -1) {
       mapping.email = i;
     } else if ((col.includes('phone') || col.includes('mobile') || col.includes('tel')) && mapping.phone === -1) {
       mapping.phone = i;
@@ -1780,14 +1782,7 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
     }
 
     const mappedFields = Object.values(headerMapping || {}).filter(Boolean);
-    const requiredScalars = [
-      'Email_1',
-      'Phone',
-      'Address',
-      'Postal_Code',
-      'City',
-      'Date_of_Birth',
-    ];
+    const requiredScalars = ['Phone'];
     const missingScalars = requiredScalars.filter((field) => !mappedFields.includes(field));
     const hasFullName = mappedFields.includes('Deal_Name');
     const hasSplitName =
@@ -1797,7 +1792,7 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
       return res.status(400).json({
         success: false,
         error:
-          'Mapping incomplete: require Email, Phone, Address, Postal_Code, City, Date_of_Birth, and either Deal_Name (full name) or First_Name + Last_Name.',
+          'Mapping incomplete: require Phone, and either Deal_Name (full name) or First_Name + Last_Name.',
         missing: {
           scalars: missingScalars,
           name: !hasName,
