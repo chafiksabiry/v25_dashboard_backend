@@ -334,7 +334,7 @@ exports.createCall = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({

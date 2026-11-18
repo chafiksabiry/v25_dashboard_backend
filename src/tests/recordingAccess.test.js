@@ -124,6 +124,12 @@ describe('GET /api/calls et /api/calls/:id', () => {
     const r = await get(`/api/calls?companyId=${COMPANY}`, token('owner'));
     expect(r.status).toBe(503);
   });
+  test('POST /api/calls : réponse filtrée pour la secrétaire', async () => {
+    mockCall.create = jest.fn(async () => ({ _id: CALL_ID }));
+    const r = await get('/api/calls', token('secretary'), 'POST');
+    expect(r.status).toBe(201);
+    expect(r.body.data).toMatchObject({ recording_url: null, recording_url_cloudinary: null });
+  });
   test('PUT /api/calls/:id : réponse filtrée pour la secrétaire', async () => {
     mockCall.findByIdAndUpdate.mockResolvedValue({ _id: CALL_ID });
     const r = await get(`/api/calls/${CALL_ID}`, token('secretary'), 'PUT');
