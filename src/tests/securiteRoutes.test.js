@@ -26,7 +26,7 @@ const CALL_B = '6c0000000000000000000b02';
 const U_REP = '6d00000000000000000000e1';
 const AGENT_REP = '6e00000000000000000000e1';
 const token = (userId) => jwt.sign({ userId }, 'test-secret');
-const members = { 'u-a': { companyId: A }, 'u-b': { companyId: B } };
+const members = { 'u-a': { companyId: A }, 'u-b': { companyId: B }, 'u-ag': { companyId: A, isAgent: true }, 'u-agb': { companyId: B, isAgent: true }, 'u-multi': { companyId: B, isAgent: true, companyIds: [B, A], employments: [{ companyId: A, status: 'active' }, { companyId: 'ccccccccccccccccccccccc3', status: 'revoked' }] } };
 
 const db = {
   gigs: { [GIG_A]: { _id: GIG_A, companyId: A }, [GIG_B]: { _id: GIG_B, companyId: B } },
@@ -236,5 +236,44 @@ describe('configuration et identifiants Google', () => {
     const fs = require('fs'); const path = require('path');
     expect(fs.existsSync(path.join(__dirname, '../config/vertexServiceAccount.json'))).toBe(false);
     expect(fs.existsSync(path.join(__dirname, '../config/speechToTextServiceAccount.json'))).toBe(false);
+  });
+});
+
+describe('agent CLOUD (agent / opérateur du centre, isAgent dans /me) : liste et qualifie, ne gère pas', () => {
+  const AG = 'u-ag';
+  test('liste des prospects du gig : agentId imposé depuis le jeton (userId), jamais celui du client', async () => {
+    const r = await call('GET', `/api/leads/gig/${GIG_A}?agentId=${AGENT_REP}&page=1`, { auth: token(AG) });
+    expect(r.status).toBe(200);
+    expect(r.body.query).toMatchObject({ agentId: AG, page: '1' });
+    const s2 = await call('GET', `/api/leads/gig/${GIG_A}/search?search=x&agentId=forge`, { auth: token(AG) });
+    expect(s2.body.query.agentId).toBe(AG);
+  });
+  test('gestionnaire : liste de l\'entreprise (agentId retiré) ; rep : son profil rep', async () => {
+    expect((await call('GET', `/api/leads/gig/${GIG_A}?agentId=forge`, { auth: token('u-a') })).body.query.agentId).toBeUndefined();
+    expect((await call('GET', `/api/leads/gig/${GIG_A}?agentId=forge`, { auth: token(U_REP) })).body.query.agentId).toBe(AGENT_REP);
+  });
+  test('gig d\'une autre entreprise : 403', async () => {
+    expect((await call('GET', `/api/leads/gig/${GIG_B}`, { auth: token(AG) })).status).toBe(403);
+  });
+  test('qualification : 200, agentId = userId du jeton ; un membre non agent sans profil rep reste refusé', async () => {
+    const r = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(AG), body: { agentId: AGENT_REP, disposition: 'called_callback' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ handler: 'setDisposition', body: { agentId: AG, disposition: 'called_callback' } });
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-a'), body: { disposition: 'to_call' } })).status).toBe(403);
+    expect((await call('POST', `/api/leads/${LEAD_A}/cockpit-claim`, { auth: token(AG), body: {} })).body.body.agentId).toBe(AG);
+  });
+  test('actions de gestion refusées : confirmer un statut, supprimer, archiver, créer, champs hors disposition', async () => {
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition/confirm`, { auth: token(AG), body: { approve: true } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition/confirm`, { auth: token('u-a'), body: { approve: true } })).status).toBe(200);
+    expect((await call('DELETE', `/api/leads/${LEAD_A}`, { auth: token(AG) })).status).toBe(403);
+    expect((await call('POST', `/api/leads/${LEAD_A}/archive`, { auth: token(AG) })).status).toBe(403);
+    expect((await call('POST', '/api/leads', { auth: token(AG), body: { gigId: GIG_A, Deal_Name: 'x' } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { Deal_Name: 'x' } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { nextFollowUpAt: '2026-12-01T17:00:00Z' } })).status).toBe(200);
+  });
+  test('multi-centres : un emploi actif ouvre l\'autre centre, un emploi révoqué ou une autre entreprise non', async () => {
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-multi'), body: { disposition: 'to_call' } })).status).toBe(200);
+    expect((await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token('u-multi') })).body.query.agentId).toBe('u-multi');
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-agb'), body: { disposition: 'to_call' } })).status).toBe(403);
   });
 });

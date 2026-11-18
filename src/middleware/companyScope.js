@@ -55,9 +55,18 @@ function authenticateUser(req, res, next) {
   }
 }
 
-async function callerCompanyId(auth) {
+const idList = (v) => (Array.isArray(v) ? v.map((x) => String((x && (x.companyId || x._id)) || x || '')).filter(Boolean) : []);
+
+/**
+ * Appartenance de l'appelant, lue chez le service d'inscription (`GET /api/company-members/me`) :
+ *  - `companyId` : entreprise principale (ou active) ;
+ *  - `companyIds` : toutes les entreprises dont il est membre : principale, `companyIds`, et emplois actifs d'un agent qui travaille
+ *    pour plusieurs centres (`employments[].status === 'active'`) ;
+ *  - `isAgent` : agent / opérateur employé par le centre (CLOUD), `isOwner` : titulaire.
+ */
+async function callerMembership(auth) {
   const cached = companyByUser.get(auth.userId);
-  if (cached && cached.expires > Date.now()) return cached.companyId;
+  if (cached && cached.expires > Date.now()) return cached.membership;
 
   const origin = registrationOrigin();
   if (!origin) throw new ScopeError(503, 'Company lookup is not configured');
@@ -70,9 +79,13 @@ async function callerCompanyId(auth) {
     });
     if (!res.ok) throw new ScopeError(503, 'Company lookup failed');
     const payload = await res.json();
-    const companyId = payload && payload.data && payload.data.companyId ? String(payload.data.companyId) : null;
-    companyByUser.set(auth.userId, { companyId, expires: Date.now() + CACHE_TTL_MS });
-    return companyId;
+    const d = (payload && payload.data) || {};
+    const companyId = d.companyId ? String(d.companyId) : null;
+    const activeEmployments = (Array.isArray(d.employments) ? d.employments : []).filter((e) => e && (!e.status || e.status === 'active'));
+    const companyIds = [...new Set([companyId, ...idList(d.companyIds), ...idList(activeEmployments)].filter(Boolean))];
+    const membership = { companyId, companyIds, isAgent: d.isAgent === true, isOwner: d.isOwner === true };
+    companyByUser.set(auth.userId, { membership, expires: Date.now() + CACHE_TTL_MS });
+    return membership;
   } catch (error) {
     if (error instanceof ScopeError) throw error;
     throw new ScopeError(503, 'Company lookup failed');
@@ -81,11 +94,15 @@ async function callerCompanyId(auth) {
   }
 }
 
-/** Throws a ScopeError unless the authenticated caller belongs to `companyId`. */
+async function callerCompanyId(auth) {
+  return (await callerMembership(auth)).companyId;
+}
+
+/** Throws a ScopeError unless the authenticated caller belongs to `companyId` (principale ou emploi actif). */
 async function assertCompanyAccess(req, companyId) {
   if (!req.auth) throw new ScopeError(401, 'Authentication required');
-  const mine = await callerCompanyId(req.auth);
-  if (mine && companyId && String(mine) === String(companyId)) return;
+  const { companyId: mine, companyIds } = await callerMembership(req.auth);
+  if (companyId && companyIds.includes(String(companyId))) return;
   if (String(process.env.COMPANY_SCOPE_MODE || '').toLowerCase() === 'log') {
     console.warn(`[companyScope] would deny user ${req.auth.userId} (company ${mine}) on company ${companyId}`);
     return;
@@ -97,4 +114,4 @@ function clearCompanyCache() {
   companyByUser.clear();
 }
 
-module.exports = { authenticateUser, assertCompanyAccess, callerCompanyId, ScopeError, clearCompanyCache, registrationOrigin, bearerToken };
+module.exports = { authenticateUser, assertCompanyAccess, callerCompanyId, callerMembership, ScopeError, clearCompanyCache, registrationOrigin, bearerToken };

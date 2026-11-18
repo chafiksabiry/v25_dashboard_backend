@@ -1,5 +1,5 @@
 const mongoose = require('mongoose');
-const { authenticateUser, assertCompanyAccess, callerCompanyId, bearerToken } = require('./companyScope');
+const { authenticateUser, assertCompanyAccess, callerCompanyId, callerMembership, bearerToken } = require('./companyScope');
 
 /**
  * Contrôle d'accès des routes du tableau de bord (prospects, fichiers de contacts, Zoho, Vertex, Speech-to-Text, appels).
@@ -16,6 +16,14 @@ const { authenticateUser, assertCompanyAccess, callerCompanyId, bearerToken } = 
  *
  * Appartenance : l'entreprise d'un utilisateur est lue chez le service d'inscription (REGISTRATION_BACKEND_URL). Un rep (agent)
  * n'est pas membre de l'entreprise : il accède aux prospects d'un gig s'il y est inscrit (service de matching, MATCHING_API_URL).
+ *
+ * Agent CLOUD (agent / opérateur employé par le centre, `isAgent` dans /me) : membre de l'entreprise du gig, il travaille comme un rep
+ * (liste des prospects, qualification, cockpit) mais ne gère pas les prospects (création, suppression, archivage, confirmation d'un
+ * statut, champs autres que la disposition et le suivi).
+ *
+ * Identifiant d'acteur (agentId enregistré dans pendingDispositionBy, assignedRepId, cockpitLockedBy, et lu pour l'exclusivité) :
+ * TOUJOURS déduit du jeton, jamais du client. Rep : `_id` de son profil rep (collection agents). Agent CLOUD sans profil rep :
+ * son `userId`. Les deux espaces ne se recouvrent pas (identifiants Mongo distincts).
  */
 
 const OBJECT_ID = /^[a-f0-9]{24}$/i;
@@ -117,6 +125,20 @@ async function agentEnrolledInGig(agentId, gigId) {
   }
 }
 
+/** Agent / opérateur employé par le centre (CLOUD), d'après /me ; jamais vrai sans jeton. */
+async function isCloudAgent(req) {
+  if (!req.auth) return false;
+  return (await callerMembership(req.auth)).isAgent === true;
+}
+
+/** Identifiant d'acteur du porteur du jeton (voir l'en-tête) : profil rep, sinon userId d'un agent CLOUD membre ; null sinon. */
+async function actorId(req, { cloudAgentAllowed }) {
+  const agentId = await ownAgentId(req);
+  if (agentId) return agentId;
+  if (cloudAgentAllowed && (await isCloudAgent(req))) return req.auth.userId;
+  return null;
+}
+
 /** Membre de l'entreprise (403 sinon). */
 async function isMember(req, companyId) {
   if (!companyId) return false;
@@ -136,7 +158,11 @@ async function isMember(req, companyId) {
 async function gigAccess(req, gigId, { allowReps = true } = {}) {
   const gig = await findRaw('gigs', gigId, { companyId: 1 });
   if (!gig) return 'not_found';
-  if (await isMember(req, idOf(gig.companyId))) return 'ok';
+  if (await isMember(req, idOf(gig.companyId))) {
+    // Agent CLOUD : il travaille les prospects du gig (lecture) mais ne les gère pas (création, archivage, fichiers).
+    if (!allowReps && (await isCloudAgent(req))) return 'forbidden';
+    return 'ok';
+  }
   if (allowReps) {
     const agentId = await ownAgentId(req);
     if (agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) return 'ok';
@@ -188,16 +214,18 @@ function guardLeadParam(param = 'id', options = {}) {
     try {
       const lead = await findRaw('leads', leadId, { companyId: 1, gigId: 1 });
       if (!lead) return deny(res, 404, 'Lead not found');
-      if (await isMember(req, idOf(lead.companyId))) {
+      const gig = lead.gigId ? await findRaw('gigs', idOf(lead.gigId), { companyId: 1 }) : null;
+      if ((await isMember(req, idOf(lead.companyId))) || (gig && (await isMember(req, idOf(gig.companyId))))) {
+        // Agent CLOUD : membre, mais il travaille les prospects sans les gérer (actions de gestion refusées).
+        if (await isCloudAgent(req)) {
+          if (!allowReps || options.managersOnly) return deny(res, 403, 'Not allowed for an agent');
+          req.leadAccess = 'agent';
+          return next();
+        }
         req.leadAccess = 'member';
         return next();
       }
       if (lead.gigId) {
-        const gig = await findRaw('gigs', idOf(lead.gigId), { companyId: 1 });
-        if (gig && (await isMember(req, idOf(gig.companyId)))) {
-          req.leadAccess = 'member';
-          return next();
-        }
         const agentId = allowReps ? await ownAgentId(req) : null;
         if (gig && agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) {
           req.leadAccess = 'rep';
@@ -335,7 +363,7 @@ const REP_EDITABLE_FIELDS = new Set([
 async function guardLeadUpdate(req, res, next) {
   if (!req.auth) return next();
   const body = req.body || {};
-  if (req.leadAccess === 'rep') {
+  if (req.leadAccess === 'rep' || req.leadAccess === 'agent') {
     const forbidden = Object.keys(body).filter((k) => !REP_EDITABLE_FIELDS.has(k));
     if (forbidden.length) return deny(res, 403, `Fields not editable by a rep: ${forbidden.join(', ')}`);
     return next();
@@ -359,9 +387,30 @@ async function guardLeadUpdate(req, res, next) {
 async function pinAgentFromToken(req, res, next) {
   if (!req.auth) return next();
   try {
-    const agentId = await ownAgentId(req);
+    const agentId = await actorId(req, { cloudAgentAllowed: req.leadAccess === 'agent' });
     if (!agentId) return deny(res, 403, 'A rep profile is required');
     req.body = { ...(req.body || {}), agentId };
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
+/**
+ * Liste des prospects d'un gig (GET /gig/:gigId, /search, après guardGig) avec un jeton : un rep ou un agent CLOUD voit la liste
+ * filtrée pour SON identifiant d'acteur (exclusivité, « déjà appelé ») ; l'agentId de la requête est remplacé. Un gestionnaire
+ * (membre non agent) garde la liste de l'entreprise (agentId de la requête retiré).
+ */
+async function pinListAgent(req, res, next) {
+  if (!req.auth) return next();
+  try {
+    const gig = await findRaw('gigs', req.params.gigId, { companyId: 1 });
+    const member = gig ? await isMember(req, idOf(gig.companyId)) : false;
+    const q = { ...(req.query || {}) };
+    delete q.agentId;
+    const agentId = member ? (await isCloudAgent(req) ? req.auth.userId : null) : await ownAgentId(req);
+    if (agentId) q.agentId = agentId;
+    req.query = q;
     return next();
   } catch (error) {
     return sendScopeError(res, error);
@@ -384,6 +433,7 @@ module.exports = {
   pinCreatedLeadsCompany,
   guardLeadUpdate,
   pinAgentFromToken,
+  pinListAgent,
   guardCallsQuery,
   requireAuth,
   legacyAnon,
