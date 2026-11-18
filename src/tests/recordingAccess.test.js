@@ -201,3 +201,18 @@ describe('analytics et dashboard : refusés à un agent CLOUD', () => {
     expect((await get('/api/analytics/calls', token('owner'))).status).not.toBe(403);
   });
 });
+
+describe('GET /api/calls par un agent CLOUD sans profil rep', () => {
+  test('ses appels du poste (handledBy.userId) ou de rep (agent), jamais toute l’entreprise', async () => {
+    const AGENT_USER = '6f00000000000000000000a1';
+    SESSIONS[AGENT_USER] = { isAgent: true, companyId: COMPANY, permissions: {} };
+    const r = await get(`/api/calls?companyId=${COMPANY}`, token(AGENT_USER));
+    expect(r.status).toBe(200);
+    const q = mockCall.find.mock.calls.at(-1)[0];
+    expect(q.companyId).toBeUndefined();
+    expect(q.agent).toBeUndefined();
+    expect(q.$or.map((c) => Object.keys(c)[0])).toEqual(['agent', 'handledBy.userId']);
+    expect(String(q.$or[0].agent)).toBe(AGENT_USER);
+    expect(String(q.$or[1]['handledBy.userId'])).toBe(AGENT_USER);
+  });
+});

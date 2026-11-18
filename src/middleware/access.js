@@ -347,6 +347,8 @@ async function guardCallsQuery(req, res, next) {
       delete own.companyId; delete own.userId;
       own.agentId = await actorId(req, { agentLevel: true });
       req.query = own;
+      // Appels du poste CLOUD (center_portal) : handledBy.userId, sans agent. La liste lit donc agent = acteur OU handledBy.userId = lui.
+      req.callsOwnerScope = { agentId: own.agentId, userId: req.auth.userId };
       return next();
     }
     if (q.companyId) await assertCompanyAccess(req, q.companyId);
@@ -386,7 +388,7 @@ const RECORDING_KEYS = ['recording_url', 'recording_url_cloudinary'];
  * Modification d'un appel (PUT /calls/:id, après guardCallParam) :
  *  - toute clé $… ou pointée (sauf transaction.validByReps / transaction.validByCompany au premier niveau) : 400 ;
  *  - transaction : seulement validByReps / validByCompany, booléen ou null ;
- *  - companyId n'est jamais modifiable ; agent, recording_url*, transaction.validByCompany : gestionnaire seulement ;
+ *  - companyId, lead, gigId, userId ne sont jamais modifiables ; agent, recording_url*, transaction.validByCompany : gestionnaire seulement ;
  *  - rep (son propre appel) : transaction.validByReps seulement (403 sinon) ; agent CLOUD : refusé en amont (membersOnly).
  */
 function guardCallUpdate(req, res, next) {
@@ -400,7 +402,9 @@ function guardCallUpdate(req, res, next) {
     if (extra.length || Object.values(tx).some((v) => v !== null && typeof v !== 'boolean')) return deny(res, 400, 'Invalid transaction');
     body.transaction = tx;
   }
-  delete body.companyId;
+  // Rattachement de l'appel jamais modifiable (aucun front ne l'envoie) : sinon un appel pourrait viser le prospect d'une autre entreprise,
+  // puis transaction.validByCompany marquerait ce prospect signé (markLeadContractSigned).
+  for (const k of ['companyId', 'lead', 'gigId', 'userId']) delete body[k];
   const manager = Boolean(req.auth) && req.callAccess === 'member';
   if (req.callAccess === 'rep') {
     const keys = Object.keys(body);

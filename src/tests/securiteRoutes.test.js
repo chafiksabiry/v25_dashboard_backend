@@ -367,3 +367,13 @@ describe('appels et prospects : corps de requête et lectures de gestion (3e rel
     expect((await call('GET', '/api/calls', { auth: token('u-a') })).body.query.companyId).toBe(A);
   });
 });
+
+describe('appel : rattachement non modifiable (4e relecture)', () => {
+  test('lead, gigId, userId retirés (gestionnaire et anonyme) : un appel ne peut pas viser le prospect d\'une autre entreprise', async () => {
+    const r = await call('PUT', `/api/calls/${CALL_A}`, { auth: token('u-a'), body: { lead: LEAD_B, gigId: GIG_B, userId: 'u-b', 'transaction.validByCompany': true } });
+    expect(r.status).toBe(200);
+    expect(r.body.body).toEqual({ transaction: { validByCompany: true } });
+    const anon = await call('PUT', `/api/calls/${CALL_A}`, { body: { lead: LEAD_B, gigId: GIG_B, userId: 'u-b', notes: 'n' } });
+    expect(anon.body.body).toEqual({ notes: 'n' });
+  });
+});
