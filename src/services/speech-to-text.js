@@ -1,0 +1,49 @@
+const speech = require('@google-cloud/speech');
+const { SPEECH_VARS, googleAuthOptions } = require('./gcpCredentials');
+
+// Identifiants : GCP_SPEECH_TO_TEXT_CREDENTIALS (JSON du compte de service, voir gcpCredentials.js), sinon ADC.
+// Aucun fichier de clé. Client créé au premier appel : sans identifiants, le service démarre et l'appel échoue clairement.
+let speechClient = null;
+const getClient = () => {
+    if (!speechClient) speechClient = new speech.SpeechClient(googleAuthOptions(SPEECH_VARS, 'Speech-to-Text'));
+    return speechClient;
+};
+
+exports.transcribeLongAudio = async (languageCode, fileUri) => {
+    try {
+        const config = {
+            encoding: "LINEAR16", // Ensure the correct encoding for the uploaded file OGG_OPUS 
+            languageCode: languageCode,
+            sampleRateHertz: 48000,
+            enableAutomaticPunctuation: true, // Improve readability with punctuation
+        };
+
+        const audio = {
+            uri: fileUri, // Google Cloud Storage URI (gs://bucket-name/file.flac)
+        };
+
+        const request = { config, audio };
+
+        console.log("Starting long audio transcription...");
+
+        // Long-running operation for large audio files
+        const [operation] = await getClient().longRunningRecognize(request);
+
+        console.log("Waiting for transcription to complete...");
+        const [response] = await operation.promise(); // Wait for the operation to complete
+
+        // Extract and join transcriptions
+        const transcription = response.results
+            .map(result => result.alternatives[0].transcript)
+            .join("\n");
+
+        console.log(`Transcription completed: \n${transcription}`);
+        return transcription;
+    } catch (error) {
+        console.error("Error transcribing long audio:", error);
+        throw new Error("Long audio transcription failed");
+    }
+};
+
+// Pour les tests : options passées au client Speech.
+exports.speechClientOptions = (env = process.env, logger = console) => googleAuthOptions(SPEECH_VARS, 'Speech-to-Text', env, logger);
