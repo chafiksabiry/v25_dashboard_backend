@@ -1,5 +1,6 @@
 const express = require('express');
-const { protect } = require('../middleware/auth');
+const { authenticateUser } = require('../middleware/companyScope');
+const access = require('../middleware/access');
 const {
   getOverview,
   getCallMetrics,
@@ -9,7 +10,8 @@ const {
 
 const router = express.Router();
 
-router.use(protect);
+// Jeton exigé ; lectures cantonnées à l'entreprise de l'appelant (service d'inscription), jamais un paramètre client.
+router.use(authenticateUser, access.scopeToCallerCompany);
 
 router.get('/overview', getOverview);
 router.get('/calls', getCallMetrics);
