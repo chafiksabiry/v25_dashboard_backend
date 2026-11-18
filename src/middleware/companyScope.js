@@ -58,15 +58,16 @@ function authenticateUser(req, res, next) {
 const idList = (v) => (Array.isArray(v) ? v.map((x) => String((x && (x.companyId || x._id)) || x || '')).filter(Boolean) : []);
 
 /**
- * Appartenance de l'appelant, lue chez le service d'inscription (`GET /api/company-members/me`) :
- *  - `companyId` : entreprise principale (ou active) ;
- *  - `companyIds` : toutes les entreprises dont il est membre : principale, `companyIds`, et emplois actifs d'un agent qui travaille
- *    pour plusieurs centres (`employments[].status === 'active'`) ;
- *  - `isAgent` : agent / opérateur employé par le centre (CLOUD), `isOwner` : titulaire.
+ * Session de l'appelant chez le service d'inscription (`GET /api/company-members/me`), un seul objet pour tous les contrôles :
+ *  - `companyId` : entreprise principale. SEULE entreprise où l'appelant a le niveau « membre » (titulaire, droits, écoute) ;
+ *  - `companyIds` : principale + autres centres d'un agent multi-centres (`companyIds`, emplois `status === 'active'` ; un emploi sans
+ *    statut n'est pas actif). Une entreprise atteinte ainsi ne donne qu'un accès de niveau AGENT (voir middleware/access.js) ;
+ *  - `isOwner`, `isAgent`, `isClient`, `permissions` : tels que /me les renvoie (globaux, valables pour l'entreprise principale).
+ * Cache court (CACHE_TTL_MS) par utilisateur. Lève une ScopeError 503 si la session est illisible.
  */
-async function callerMembership(auth) {
+async function callerSession(auth) {
   const cached = companyByUser.get(auth.userId);
-  if (cached && cached.expires > Date.now()) return cached.membership;
+  if (cached && cached.expires > Date.now()) return cached.session;
 
   const origin = registrationOrigin();
   if (!origin) throw new ScopeError(503, 'Company lookup is not configured');
@@ -79,13 +80,19 @@ async function callerMembership(auth) {
     });
     if (!res.ok) throw new ScopeError(503, 'Company lookup failed');
     const payload = await res.json();
-    const d = (payload && payload.data) || {};
-    const companyId = d.companyId ? String(d.companyId) : null;
-    const activeEmployments = (Array.isArray(d.employments) ? d.employments : []).filter((e) => e && (!e.status || e.status === 'active'));
-    const companyIds = [...new Set([companyId, ...idList(d.companyIds), ...idList(activeEmployments)].filter(Boolean))];
-    const membership = { companyId, companyIds, isAgent: d.isAgent === true, isOwner: d.isOwner === true };
-    companyByUser.set(auth.userId, { membership, expires: Date.now() + CACHE_TTL_MS });
-    return membership;
+    const data = (payload && payload.data) || {};
+    const companyId = data.companyId ? String(data.companyId) : null;
+    const activeEmployments = (Array.isArray(data.employments) ? data.employments : []).filter((e) => e && e.status === 'active');
+    const session = {
+      companyId,
+      companyIds: [...new Set([companyId, ...idList(data.companyIds), ...idList(activeEmployments)].filter(Boolean))],
+      isOwner: data.isOwner === true,
+      isAgent: data.isAgent === true,
+      isClient: data.isClient === true,
+      permissions: data.permissions && typeof data.permissions === 'object' ? { ...data.permissions } : {},
+    };
+    companyByUser.set(auth.userId, { session, expires: Date.now() + CACHE_TTL_MS });
+    return session;
   } catch (error) {
     if (error instanceof ScopeError) throw error;
     throw new ScopeError(503, 'Company lookup failed');
@@ -94,15 +101,18 @@ async function callerMembership(auth) {
   }
 }
 
+/** Même objet que callerSession (nom employé par les gardes des prospects). */
+const callerMembership = callerSession;
+
 async function callerCompanyId(auth) {
-  return (await callerMembership(auth)).companyId;
+  return (await callerSession(auth)).companyId;
 }
 
-/** Throws a ScopeError unless the authenticated caller belongs to `companyId` (principale ou emploi actif). */
+/** Throws a ScopeError unless the authenticated caller is a MEMBER of `companyId` (entreprise principale seulement). */
 async function assertCompanyAccess(req, companyId) {
   if (!req.auth) throw new ScopeError(401, 'Authentication required');
-  const { companyId: mine, companyIds } = await callerMembership(req.auth);
-  if (companyId && companyIds.includes(String(companyId))) return;
+  const mine = await callerCompanyId(req.auth);
+  if (mine && companyId && String(mine) === String(companyId)) return;
   if (String(process.env.COMPANY_SCOPE_MODE || '').toLowerCase() === 'log') {
     console.warn(`[companyScope] would deny user ${req.auth.userId} (company ${mine}) on company ${companyId}`);
     return;
@@ -114,4 +124,4 @@ function clearCompanyCache() {
   companyByUser.clear();
 }
 
-module.exports = { authenticateUser, assertCompanyAccess, callerCompanyId, callerMembership, ScopeError, clearCompanyCache, registrationOrigin, bearerToken };
+module.exports = { authenticateUser, assertCompanyAccess, callerCompanyId, callerSession, callerMembership, ScopeError, clearCompanyCache, registrationOrigin, bearerToken };

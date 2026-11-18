@@ -22,15 +22,17 @@ const GIG_A = '6a0000000000000000000a01';
 const GIG_B = '6a0000000000000000000b02';
 const LEAD_A = '6b0000000000000000000a01';
 const LEAD_B = '6b0000000000000000000b02';
+const LEAD_A_TAKEN = '6b0000000000000000000a03';
+const LEAD_MISMATCH = '6b0000000000000000000a04';
 const CALL_B = '6c0000000000000000000b02';
 const U_REP = '6d00000000000000000000e1';
 const AGENT_REP = '6e00000000000000000000e1';
 const token = (userId) => jwt.sign({ userId }, 'test-secret');
-const members = { 'u-a': { companyId: A }, 'u-b': { companyId: B }, 'u-ag': { companyId: A, isAgent: true }, 'u-agb': { companyId: B, isAgent: true }, 'u-multi': { companyId: B, isAgent: true, companyIds: [B, A], employments: [{ companyId: A, status: 'active' }, { companyId: 'ccccccccccccccccccccccc3', status: 'revoked' }] } };
+const members = { 'u-a': { companyId: A }, 'u-b': { companyId: B }, 'u-ag': { companyId: A, isAgent: true }, 'u-agb': { companyId: B, isAgent: true }, 'u-multi': { companyId: B, isAgent: false, isOwner: true, permissions: { 'calls.listen': true }, employments: [{ companyId: A, status: 'active' }, { companyId: 'ccccccccccccccccccccccc3', status: 'revoked' }] }, 'u-nostatus': { companyId: B, isAgent: true, employments: [{ companyId: A }] } };
 
 const db = {
   gigs: { [GIG_A]: { _id: GIG_A, companyId: A }, [GIG_B]: { _id: GIG_B, companyId: B } },
-  leads: { [LEAD_A]: { _id: LEAD_A, companyId: A, gigId: GIG_A }, [LEAD_B]: { _id: LEAD_B, gigId: GIG_B } },
+  leads: { [LEAD_A]: { _id: LEAD_A, companyId: A, gigId: GIG_A }, [LEAD_B]: { _id: LEAD_B, gigId: GIG_B }, [LEAD_A_TAKEN]: { _id: LEAD_A_TAKEN, companyId: A, gigId: GIG_A, assignedRepId: '6e00000000000000000000ff' }, [LEAD_MISMATCH]: { _id: LEAD_MISMATCH, companyId: B, gigId: GIG_A } },
   calls: { [CALL_B]: { _id: CALL_B, companyId: B } },
 };
 const fakeDb = (m) => Object.defineProperty(m.connection, 'db', {
@@ -172,10 +174,16 @@ describe('écritures de prospects avec un jeton', () => {
     expect(r.body.body.companyId).toBeUndefined();
     expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-a'), body: { gigId: GIG_B } })).status).toBe(403);
   });
-  test('modification par un rep : disposition et suivi seulement', async () => {
-    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { repDisposition: 'callback', nextFollowUpAt: '2026-12-01' } })).status).toBe(200);
-    const r = await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { Phone: '+33600000000' } });
-    expect(r.status).toBe(403);
+  test('modification par un rep : la date de rappel seulement ; la qualification passe par /disposition', async () => {
+    const ok = await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { nextFollowUpAt: '2026-12-01T17:00:00Z', nextFollowUpType: 'callback', nextFollowUpSource: 'rep' } });
+    expect(ok.status).toBe(200);
+    expect(Object.keys(ok.body.body).sort()).toEqual(['nextFollowUpAt', 'nextFollowUpSource', 'nextFollowUpType']);
+    for (const body of [{ repDisposition: 'argued_done' }, { pendingDisposition: 'argued_done' }, { Stage: 'Won' }, { followUpCalls: [{ rewardAmount: 100, repId: 'x' }] }, { Phone: '+33600000000' }, { nextFollowUpAt: '2026-12-01T17:00:00Z', repDisposition: 'argued_done' }]) {
+      expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body })).status).toBe(403);
+    }
+    for (const body of [{ nextFollowUpAt: 'demain' }, { nextFollowUpAt: '2099-01-01T00:00:00Z' }, { nextFollowUpType: 'transaction' }, { nextFollowUpSource: 'ai' }, { nextFollowUpAt: { $gt: '' } }, {}]) {
+      expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body })).status).toBe(400);
+    }
   });
   test('disposition et cockpit : agentId pris dans le jeton', async () => {
     const r = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(U_REP), body: { agentId: 'autre', disposition: 'x' } });
@@ -269,11 +277,44 @@ describe('agent CLOUD (agent / opérateur du centre, isAgent dans /me) : liste e
     expect((await call('POST', `/api/leads/${LEAD_A}/archive`, { auth: token(AG) })).status).toBe(403);
     expect((await call('POST', '/api/leads', { auth: token(AG), body: { gigId: GIG_A, Deal_Name: 'x' } })).status).toBe(403);
     expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { Deal_Name: 'x' } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { repDisposition: 'argued_done' } })).status).toBe(403);
     expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { nextFollowUpAt: '2026-12-01T17:00:00Z' } })).status).toBe(200);
   });
-  test('multi-centres : un emploi actif ouvre l\'autre centre, un emploi révoqué ou une autre entreprise non', async () => {
+  test('multi-centres : un emploi actif ne donne qu\'un accès agent à l\'autre centre', async () => {
     expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-multi'), body: { disposition: 'to_call' } })).status).toBe(200);
     expect((await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token('u-multi') })).body.query.agentId).toBe('u-multi');
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-multi'), body: { nextFollowUpAt: '2026-12-01T17:00:00Z' } })).status).toBe(200);
+    // pas d'accès membre : statistiques, couverture, compteurs, fichiers, gestion
+    expect((await call('GET', `/api/leads/company/${A}/stats`, { auth: token('u-multi') })).status).toBe(403);
+    expect((await call('GET', `/api/leads/company/${A}/has-leads`, { auth: token('u-multi') })).status).toBe(403);
+    expect((await call('GET', `/api/file-processing/mapping/${GIG_A}`, { auth: token('u-multi') })).status).toBe(403);
+    expect((await call('POST', '/api/leads', { auth: token('u-multi'), body: { gigId: GIG_A } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition/confirm`, { auth: token('u-multi'), body: { approve: true } })).status).toBe(403);
     expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-agb'), body: { disposition: 'to_call' } })).status).toBe(403);
+  });
+  test('emploi sans statut : non actif', async () => {
+    expect((await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token('u-nostatus') })).status).toBe(403);
+  });
+  test('routes de gestion refusées à l\'agent : listes globales, statistiques, couverture, compteurs, note qualité', async () => {
+    for (const [method, path, body] of [['GET', '/api/leads'], ['GET', '/api/leads/filter?pipeline=p&stage=s'], ['GET', `/api/leads/company/${A}/stats`], ['GET', `/api/leads/company/${A}/rep-coverage`], ['GET', `/api/leads/company/${A}/has-leads`], ['PUT', `/api/calls/${CALL_B}/quality-score`, {}]]) {
+      expect((await call(method, path, { auth: token(AG), body })).status).toBe(403);
+    }
+    expect((await call('GET', `/api/leads/company/${A}/stats`, { auth: token('u-a') })).status).toBe(200);
+  });
+  test('fiche prospect : seulement ceux de sa liste (pas un prospect affecté à un autre)', async () => {
+    expect((await call('GET', `/api/leads/${LEAD_A}`, { auth: token(AG) })).status).toBe(200);
+    expect((await call('GET', `/api/leads/${LEAD_A_TAKEN}`, { auth: token(AG) })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A_TAKEN}/disposition`, { auth: token(AG), body: { disposition: 'to_call' } })).status).toBe(403);
+    expect((await call('GET', `/api/leads/${LEAD_A_TAKEN}`, { auth: token('u-a') })).status).toBe(200);
+  });
+  test('entreprise du prospect = entreprise du gig = entreprise de l\'appelant', async () => {
+    expect((await call('GET', `/api/leads/${LEAD_MISMATCH}`, { auth: token('u-a') })).status).toBe(403);
+    expect((await call('GET', `/api/leads/${LEAD_MISMATCH}`, { auth: token('u-b') })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_MISMATCH}/disposition`, { auth: token(AG), body: { disposition: 'to_call' } })).status).toBe(403);
+  });
+  test('même identifiant d\'acteur pour la liste et la qualification (profil rep d\'abord)', async () => {
+    const list = await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token(AG) });
+    const disp = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(AG), body: { disposition: 'to_call' } });
+    expect(list.body.query.agentId).toBe(disp.body.body.agentId);
   });
 });

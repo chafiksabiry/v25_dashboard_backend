@@ -131,12 +131,31 @@ async function isCloudAgent(req) {
   return (await callerMembership(req.auth)).isAgent === true;
 }
 
-/** Identifiant d'acteur du porteur du jeton (voir l'en-tête) : profil rep, sinon userId d'un agent CLOUD membre ; null sinon. */
-async function actorId(req, { cloudAgentAllowed }) {
+/**
+ * Niveau de l'appelant pour une entreprise :
+ *  - 'member' : entreprise principale, appelant non agent (titulaire, membre) ;
+ *  - 'agent'  : entreprise principale d'un agent CLOUD, OU tout autre centre atteint par companyIds / emploi actif (multi-centres :
+ *    /me ne dit pas le rôle par entreprise, l'accès y est donc toujours de niveau agent) ;
+ *  - null : aucune.
+ */
+async function companyLevel(req, companyId) {
+  if (!req.auth || !companyId) return null;
+  const session = await callerMembership(req.auth);
+  const id = String(companyId);
+  if (session.companyId && session.companyId === id) return session.isAgent ? 'agent' : 'member';
+  if ((session.companyIds || []).includes(id)) return 'agent';
+  if (String(process.env.COMPANY_SCOPE_MODE || '').toLowerCase() === 'log') return 'member';
+  return null;
+}
+
+/**
+ * Identifiant d'acteur du porteur du jeton, UNE seule règle partout (liste, qualification, cockpit) : profil rep d'abord, sinon
+ * userId d'un appelant de niveau agent ; null sinon.
+ */
+async function actorId(req, { agentLevel }) {
   const agentId = await ownAgentId(req);
   if (agentId) return agentId;
-  if (cloudAgentAllowed && (await isCloudAgent(req))) return req.auth.userId;
-  return null;
+  return agentLevel ? req.auth.userId : null;
 }
 
 /** Membre de l'entreprise (403 sinon). */
@@ -158,11 +177,10 @@ async function isMember(req, companyId) {
 async function gigAccess(req, gigId, { allowReps = true } = {}) {
   const gig = await findRaw('gigs', gigId, { companyId: 1 });
   if (!gig) return 'not_found';
-  if (await isMember(req, idOf(gig.companyId))) {
-    // Agent CLOUD : il travaille les prospects du gig (lecture) mais ne les gère pas (création, archivage, fichiers).
-    if (!allowReps && (await isCloudAgent(req))) return 'forbidden';
-    return 'ok';
-  }
+  const level = await companyLevel(req, idOf(gig.companyId));
+  if (level === 'member') return 'ok';
+  // Niveau agent : il travaille les prospects du gig (lecture) mais ne les gère pas (création, archivage, fichiers).
+  if (level === 'agent') return allowReps ? 'ok' : 'forbidden';
   if (allowReps) {
     const agentId = await ownAgentId(req);
     if (agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) return 'ok';
@@ -171,13 +189,15 @@ async function gigAccess(req, gigId, { allowReps = true } = {}) {
 }
 
 /** :companyId dans l'URL : l'appelant doit appartenir à cette entreprise. */
-function guardCompanyParam(param = 'companyId') {
+function guardCompanyParam(param = 'companyId', options = {}) {
   return async (req, res, next) => {
     if (!req.auth) return next();
     const companyId = req.params[param];
     if (!OBJECT_ID.test(String(companyId || ''))) return deny(res, 400, 'Valid companyId is required');
     try {
       await assertCompanyAccess(req, companyId);
+      // Écrans de gestion (statistiques, couverture, compteurs) : pas pour un agent.
+      if (options.membersOnly && (await isCloudAgent(req))) return deny(res, 403, 'Not allowed for an agent');
       return next();
     } catch (error) {
       return sendScopeError(res, error);
@@ -204,7 +224,11 @@ function guardGig(pick, options = {}) {
   };
 }
 
-/** Prospect :id : membre de l'entreprise du prospect (ou de son gig), ou rep inscrit au gig du prospect (si allowReps). */
+/**
+ * Prospect :id. L'entreprise du prospect, celle de son gig et celle de l'appelant doivent être la même (un prospect dont l'entreprise
+ * ne correspond pas à son gig est refusé). Niveaux : membre ; agent (CLOUD ou autre centre) : seulement un prospect qu'il voit dans sa
+ * liste (non affecté à un autre) et jamais les actions de gestion ; rep inscrit au gig (si allowReps).
+ */
 function guardLeadParam(param = 'id', options = {}) {
   const allowReps = options.allowReps !== false;
   return async (req, res, next) => {
@@ -212,22 +236,29 @@ function guardLeadParam(param = 'id', options = {}) {
     const leadId = req.params[param];
     if (!OBJECT_ID.test(String(leadId || ''))) return deny(res, 400, 'Valid lead id is required');
     try {
-      const lead = await findRaw('leads', leadId, { companyId: 1, gigId: 1 });
+      const lead = await findRaw('leads', leadId, { companyId: 1, gigId: 1, assignedRepId: 1 });
       if (!lead) return deny(res, 404, 'Lead not found');
       const gig = lead.gigId ? await findRaw('gigs', idOf(lead.gigId), { companyId: 1 }) : null;
-      if ((await isMember(req, idOf(lead.companyId))) || (gig && (await isMember(req, idOf(gig.companyId))))) {
-        // Agent CLOUD : membre, mais il travaille les prospects sans les gérer (actions de gestion refusées).
-        if (await isCloudAgent(req)) {
-          if (!allowReps || options.managersOnly) return deny(res, 403, 'Not allowed for an agent');
-          req.leadAccess = 'agent';
-          return next();
-        }
+      if (lead.gigId && !gig) return deny(res, 403, 'Not allowed for this lead');
+      const leadCompany = idOf(lead.companyId);
+      const gigCompany = gig ? idOf(gig.companyId) : null;
+      if (leadCompany && gigCompany && leadCompany !== gigCompany) return deny(res, 403, 'Not allowed for this lead');
+      const company = gigCompany || leadCompany;
+      const level = await companyLevel(req, company);
+      if (level === 'member') {
         req.leadAccess = 'member';
         return next();
       }
-      if (lead.gigId) {
-        const agentId = allowReps ? await ownAgentId(req) : null;
-        if (gig && agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) {
+      if (level === 'agent') {
+        if (!allowReps || options.managersOnly || !gig) return deny(res, 403, 'Not allowed for an agent');
+        const me = await actorId(req, { agentLevel: true });
+        if (lead.assignedRepId && idOf(lead.assignedRepId) !== me) return deny(res, 403, 'Not allowed for this lead');
+        req.leadAccess = 'agent';
+        return next();
+      }
+      if (gig && allowReps && !options.managersOnly) {
+        const agentId = await ownAgentId(req);
+        if (agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) {
           req.leadAccess = 'rep';
           return next();
         }
@@ -261,6 +292,17 @@ async function scopeToCallerCompany(req, res, next) {
   }
 }
 
+
+/** Routes de gestion (listes globales des prospects, note qualité d'un appel) : refusées à un agent CLOUD. */
+async function membersOnly(req, res, next) {
+  if (!req.auth) return next();
+  try {
+    if (await isCloudAgent(req)) return deny(res, 403, 'Not allowed for an agent');
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
 
 /** Appel :id : membre de l'entreprise de l'appel, ou rep qui l'a passé. */
 function guardCallParam(param = 'id') {
@@ -349,23 +391,48 @@ async function pinCreatedLeadsCompany(req, res, next) {
   }
 }
 
-// Champs qu'un rep inscrit au gig peut modifier sur un prospect : disposition et suivi uniquement.
-const REP_EDITABLE_FIELDS = new Set([
-  'Stage', 'Activity_Tag', 'Last_Activity_Time', 'repDisposition', 'pendingDisposition',
-  'nextFollowUpAt', 'nextFollowUpType', 'nextFollowUpSource', 'followUpCalls',
-]);
+// Champs qu'un rep ou un agent peut modifier par PUT /leads/:id : la date de rappel seulement. La qualification passe UNIQUEMENT par
+// PUT /:id/disposition (statut en attente de confirmation de l'entreprise) : Stage, repDisposition, pendingDisposition, followUpCalls
+// (récompenses), etc. sont refusés.
+const FOLLOW_UP_TYPES = new Set(['appointment', 'callback']);
+const MAX_FOLLOW_UP_MS = 90 * 24 * 60 * 60 * 1000;
+function followUpPatch(body) {
+  const keys = Object.keys(body);
+  const forbidden = keys.filter((k) => !['nextFollowUpAt', 'nextFollowUpType', 'nextFollowUpSource'].includes(k));
+  if (forbidden.length) return { error: `Fields not editable: ${forbidden.join(', ')}` };
+  const out = {};
+  if ('nextFollowUpAt' in body) {
+    if (body.nextFollowUpAt === null) out.nextFollowUpAt = null;
+    else {
+      const t = typeof body.nextFollowUpAt === 'string' ? Date.parse(body.nextFollowUpAt) : NaN;
+      if (!Number.isFinite(t) || t > Date.now() + MAX_FOLLOW_UP_MS) return { error: 'Invalid nextFollowUpAt' };
+      out.nextFollowUpAt = new Date(t);
+    }
+  }
+  if ('nextFollowUpType' in body) {
+    if (body.nextFollowUpType !== null && !FOLLOW_UP_TYPES.has(body.nextFollowUpType)) return { error: 'Invalid nextFollowUpType' };
+    out.nextFollowUpType = body.nextFollowUpType;
+  }
+  if ('nextFollowUpSource' in body) {
+    if (body.nextFollowUpSource !== null && body.nextFollowUpSource !== 'rep') return { error: 'Invalid nextFollowUpSource' };
+    out.nextFollowUpSource = body.nextFollowUpSource;
+  }
+  if (!Object.keys(out).length) return { error: 'Nothing to update' };
+  return { value: out };
+}
 
 /**
  * Modification d'un prospect (PUT /leads/:id, après guardLeadParam) avec un jeton :
  *  - membre : companyId et userId ne sont pas modifiables ; un nouveau gigId doit appartenir à son entreprise (companyId suivi) ;
- *  - rep : uniquement les champs de disposition et de suivi (403 sinon).
+ *  - rep ou agent : la date de rappel seulement, valeurs validées (date, type, source « rep ») ; 403 / 400 sinon.
  */
 async function guardLeadUpdate(req, res, next) {
   if (!req.auth) return next();
   const body = req.body || {};
   if (req.leadAccess === 'rep' || req.leadAccess === 'agent') {
-    const forbidden = Object.keys(body).filter((k) => !REP_EDITABLE_FIELDS.has(k));
-    if (forbidden.length) return deny(res, 403, `Fields not editable by a rep: ${forbidden.join(', ')}`);
+    const checked = followUpPatch(body);
+    if (checked.error) return deny(res, checked.error.startsWith('Fields') ? 403 : 400, checked.error);
+    req.body = checked.value;
     return next();
   }
   try {
@@ -387,7 +454,7 @@ async function guardLeadUpdate(req, res, next) {
 async function pinAgentFromToken(req, res, next) {
   if (!req.auth) return next();
   try {
-    const agentId = await actorId(req, { cloudAgentAllowed: req.leadAccess === 'agent' });
+    const agentId = await actorId(req, { agentLevel: req.leadAccess === 'agent' });
     if (!agentId) return deny(res, 403, 'A rep profile is required');
     req.body = { ...(req.body || {}), agentId };
     return next();
@@ -405,10 +472,11 @@ async function pinListAgent(req, res, next) {
   if (!req.auth) return next();
   try {
     const gig = await findRaw('gigs', req.params.gigId, { companyId: 1 });
-    const member = gig ? await isMember(req, idOf(gig.companyId)) : false;
+    const level = gig ? await companyLevel(req, idOf(gig.companyId)) : null;
     const q = { ...(req.query || {}) };
     delete q.agentId;
-    const agentId = member ? (await isCloudAgent(req) ? req.auth.userId : null) : await ownAgentId(req);
+    // Même règle que la qualification (actorId) : profil rep d'abord, sinon userId au niveau agent ; gestionnaire : liste complète.
+    const agentId = level === 'member' ? null : await actorId(req, { agentLevel: level === 'agent' });
     if (agentId) q.agentId = agentId;
     req.query = q;
     return next();
@@ -434,6 +502,7 @@ module.exports = {
   guardLeadUpdate,
   pinAgentFromToken,
   pinListAgent,
+  membersOnly,
   guardCallsQuery,
   requireAuth,
   legacyAnon,

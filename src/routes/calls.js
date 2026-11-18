@@ -39,6 +39,6 @@ router.route('/:id/notes')
   .post(access.guardCallParam('id'), addNote);
 
 router.route('/:id/quality-score')
-  .put(access.guardCallParam('id'), updateQualityScore);
+  .put(access.membersOnly, access.guardCallParam('id'), updateQualityScore);
 
 module.exports = router;
