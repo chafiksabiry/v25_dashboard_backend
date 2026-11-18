@@ -188,10 +188,21 @@ function guardLeadParam(param = 'id', options = {}) {
     try {
       const lead = await findRaw('leads', leadId, { companyId: 1, gigId: 1 });
       if (!lead) return deny(res, 404, 'Lead not found');
-      if (await isMember(req, idOf(lead.companyId))) return next();
+      if (await isMember(req, idOf(lead.companyId))) {
+        req.leadAccess = 'member';
+        return next();
+      }
       if (lead.gigId) {
-        const out = await gigAccess(req, idOf(lead.gigId), { allowReps });
-        if (out === 'ok') return next();
+        const gig = await findRaw('gigs', idOf(lead.gigId), { companyId: 1 });
+        if (gig && (await isMember(req, idOf(gig.companyId)))) {
+          req.leadAccess = 'member';
+          return next();
+        }
+        const agentId = allowReps ? await ownAgentId(req) : null;
+        if (gig && agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) {
+          req.leadAccess = 'rep';
+          return next();
+        }
       }
       return deny(res, 403, 'Not allowed for this lead');
     } catch (error) {
@@ -272,6 +283,91 @@ async function guardCallsQuery(req, res, next) {
   }
 }
 
+/**
+ * Création de prospects (POST /leads, /leads/bulk) avec un jeton : l'entreprise de chaque prospect est celle de son gig
+ * (déjà vérifié par guardGig) ; un companyId ou un userId envoyé par le client est remplacé.
+ */
+async function pinCreatedLeadsCompany(req, res, next) {
+  if (!req.auth) return next();
+  try {
+    const companyOf = {};
+    const resolve = async (gigId) => {
+      const key = String(gigId);
+      if (!(key in companyOf)) {
+        const gig = await findRaw('gigs', key, { companyId: 1 });
+        companyOf[key] = gig ? idOf(gig.companyId) : null;
+      }
+      return companyOf[key];
+    };
+    const body = req.body || {};
+    if (Array.isArray(body.leads)) {
+      for (const lead of body.leads) {
+        const gigId = (lead && lead.gigId) || body.gigId;
+        const companyId = gigId ? await resolve(gigId) : null;
+        if (!companyId) return deny(res, 400, 'Each lead needs a gig of your company');
+        lead.gigId = gigId;
+        lead.companyId = companyId;
+        lead.userId = req.auth.userId;
+      }
+    } else {
+      const companyId = body.gigId ? await resolve(body.gigId) : null;
+      if (!companyId) return deny(res, 400, 'gigId is required');
+      body.companyId = companyId;
+      body.userId = req.auth.userId;
+    }
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
+// Champs qu'un rep inscrit au gig peut modifier sur un prospect : disposition et suivi uniquement.
+const REP_EDITABLE_FIELDS = new Set([
+  'Stage', 'Activity_Tag', 'Last_Activity_Time', 'repDisposition', 'pendingDisposition',
+  'nextFollowUpAt', 'nextFollowUpType', 'nextFollowUpSource', 'followUpCalls',
+]);
+
+/**
+ * Modification d'un prospect (PUT /leads/:id, après guardLeadParam) avec un jeton :
+ *  - membre : companyId et userId ne sont pas modifiables ; un nouveau gigId doit appartenir à son entreprise (companyId suivi) ;
+ *  - rep : uniquement les champs de disposition et de suivi (403 sinon).
+ */
+async function guardLeadUpdate(req, res, next) {
+  if (!req.auth) return next();
+  const body = req.body || {};
+  if (req.leadAccess === 'rep') {
+    const forbidden = Object.keys(body).filter((k) => !REP_EDITABLE_FIELDS.has(k));
+    if (forbidden.length) return deny(res, 403, `Fields not editable by a rep: ${forbidden.join(', ')}`);
+    return next();
+  }
+  try {
+    delete body.companyId;
+    delete body.userId;
+    if (body.gigId) {
+      const gig = await findRaw('gigs', body.gigId, { companyId: 1 });
+      if (!gig) return deny(res, 404, 'Gig not found');
+      if (!(await isMember(req, idOf(gig.companyId)))) return deny(res, 403, 'Not allowed for this gig');
+      body.companyId = idOf(gig.companyId);
+    }
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
+/** Actions de rep (disposition, cockpit) avec un jeton : agentId pris dans le profil rep du porteur, jamais dans le corps. */
+async function pinAgentFromToken(req, res, next) {
+  if (!req.auth) return next();
+  try {
+    const agentId = await ownAgentId(req);
+    if (!agentId) return deny(res, 403, 'A rep profile is required');
+    req.body = { ...(req.body || {}), agentId };
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
 function clearEnrollCache() {
   enrollCache.clear();
 }
@@ -285,6 +381,9 @@ module.exports = {
   guardSelfParam,
   scopeToCallerCompany,
   guardCallParam,
+  pinCreatedLeadsCompany,
+  guardLeadUpdate,
+  pinAgentFromToken,
   guardCallsQuery,
   requireAuth,
   legacyAnon,

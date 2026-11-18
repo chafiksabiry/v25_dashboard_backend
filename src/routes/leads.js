@@ -126,19 +126,19 @@ router.post("/upload-csv", access.strictAuth, upload.single("file"), async (req,
 // Liste globale : jeton exigé, cantonnée à l'entreprise de l'appelant.
 router.route("/")
   .get(access.strictAuth, access.scopeToCallerCompany, getLeads)
-  .post(access.compatAuth, access.guardGig(gigOfBody, { allowReps: false }), createLead);
-router.post("/bulk", access.compatAuth, access.guardGig(gigsOfBulk, { allowReps: false }), createLeadsBulk); // Add bulk creation route BEFORE /:id routes
+  .post(access.compatAuth, access.guardGig(gigOfBody, { allowReps: false }), access.pinCreatedLeadsCompany, createLead);
+router.post("/bulk", access.compatAuth, access.guardGig(gigsOfBulk, { allowReps: false }), access.pinCreatedLeadsCompany, createLeadsBulk); // Add bulk creation route BEFORE /:id routes
 router.post("/archive", access.compatAuth, access.guardGig(gigOfBody, { allowReps: false }), archiveLeads);
 // Avant /:id (sinon « filter » est pris pour un identifiant).
 router.route("/filter").get(access.strictAuth, access.scopeToCallerCompany, getLeadsByPipelineAndStage);
 router.post("/:id/archive", access.compatAuth, access.guardLeadParam("id", { allowReps: false }), archiveLead);
-router.post("/:id/cockpit-claim", access.compatAuth, access.guardLeadParam("id"), claimCockpit);
-router.post("/:id/cockpit-release", access.compatAuth, access.guardLeadParam("id"), releaseCockpit);
-router.put("/:id/disposition", access.compatAuth, access.guardLeadParam("id"), setDisposition);
+router.post("/:id/cockpit-claim", access.compatAuth, access.guardLeadParam("id"), access.pinAgentFromToken, claimCockpit);
+router.post("/:id/cockpit-release", access.compatAuth, access.guardLeadParam("id"), access.pinAgentFromToken, releaseCockpit);
+router.put("/:id/disposition", access.compatAuth, access.guardLeadParam("id"), access.pinAgentFromToken, setDisposition);
 router.put("/:id/disposition/confirm", access.compatAuth, access.guardLeadParam("id"), confirmDisposition);
 router.route("/:id")
   .get(access.compatAuth, access.guardLeadParam("id"), getLead)
-  .put(access.compatAuth, access.guardLeadParam("id"), updateLead)
+  .put(access.compatAuth, access.guardLeadParam("id"), access.guardLeadUpdate, updateLead)
   .delete(access.compatAuth, access.guardLeadParam("id", { allowReps: false }), deleteLead);
 router.route("/:id/analyze").post(access.compatAuth, access.guardLeadParam("id"), analyzeLead);
 router.route("/:id/generate-script").post(access.compatAuth, access.guardLeadParam("id"), generateScript);

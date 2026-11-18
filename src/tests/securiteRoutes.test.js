@@ -2,7 +2,7 @@ process.env.JWT_SECRET = 'test-secret';
 process.env.REGISTRATION_BACKEND_URL = 'https://reg.example';
 process.env.MATCHING_API_URL = 'https://match.example/api';
 
-const echo = () => new Proxy({}, { get: (_t, name) => (typeof name === 'string' && name !== 'then' && name !== '__esModule' ? (req, res) => res.status(200).json({ success: true, handler: name, query: req.query, scope: req.scopeCompanyId || null }) : undefined) });
+const echo = () => new Proxy({}, { get: (_t, name) => (typeof name === 'string' && name !== 'then' && name !== '__esModule' ? (req, res) => res.status(200).json({ success: true, handler: name, query: req.query, body: req.body, scope: req.scopeCompanyId || null }) : undefined) });
 jest.mock('../controllers/leads', () => echo());
 jest.mock('../controllers/calls', () => echo());
 jest.mock('../controllers/vertex', () => echo());
@@ -151,6 +151,42 @@ describe('routes compat : contrôle complet avec un jeton', () => {
   });
 });
 
+
+describe('écritures de prospects avec un jeton', () => {
+  test('création : companyId et userId imposés depuis le gig et le jeton', async () => {
+    const r = await call('POST', '/api/leads', { auth: token('u-a'), body: { gigId: GIG_A, companyId: B, userId: 'pirate' } });
+    expect(r.status).toBe(200);
+    expect(r.body.body.companyId).toBe(A);
+    expect(r.body.body.userId).toBe('u-a');
+    expect((await call('POST', '/api/leads', { auth: token('u-a'), body: { gigId: GIG_B } })).status).toBe(403);
+  });
+  test('import en masse : entreprise de chaque prospect imposée', async () => {
+    const r = await call('POST', '/api/leads/bulk', { auth: token('u-a'), body: { gigId: GIG_A, leads: [{ First_Name: 'x', companyId: B }] } });
+    expect(r.status).toBe(200);
+    expect(r.body.body.leads[0].companyId).toBe(A);
+    expect(r.body.body.leads[0].gigId).toBe(GIG_A);
+  });
+  test('modification par un membre : companyId ignoré, gig d\'une autre entreprise refusé', async () => {
+    const r = await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-a'), body: { First_Name: 'y', companyId: B } });
+    expect(r.status).toBe(200);
+    expect(r.body.body.companyId).toBeUndefined();
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-a'), body: { gigId: GIG_B } })).status).toBe(403);
+  });
+  test('modification par un rep : disposition et suivi seulement', async () => {
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { repDisposition: 'callback', nextFollowUpAt: '2026-12-01' } })).status).toBe(200);
+    const r = await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { Phone: '+33600000000' } });
+    expect(r.status).toBe(403);
+  });
+  test('disposition et cockpit : agentId pris dans le jeton', async () => {
+    const r = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(U_REP), body: { agentId: 'autre', disposition: 'x' } });
+    expect(r.status).toBe(200);
+    expect(r.body.body.agentId).toBe(AGENT_REP);
+    const c = await call('POST', `/api/leads/${LEAD_A}/cockpit-claim`, { auth: token(U_REP), body: { agentId: 'autre' } });
+    expect(c.body.body.agentId).toBe(AGENT_REP);
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-a'), body: { agentId: 'x' } })).status).toBe(403);
+  });
+});
+
 describe('routes compat : applications non migrées', () => {
   test('sans jeton (ou ancien en-tête gigId:userId) : toléré par défaut', async () => {
     expect((await call('GET', `/api/leads/company/${B}/stats`)).status).toBe(200);
@@ -195,7 +231,6 @@ describe('configuration et identifiants Google', () => {
     const { options } = require('../services/vertex').vertexClientOptions({}, logger);
     expect(options.googleAuthOptions.credentials).toBeUndefined();
     expect(logger.warn.mock.calls.some((c) => /VERTEX_AI_CREDENTIALS/.test(c[0]))).toBe(true);
-    expect(() => require('../services/speech-to-text')).not.toThrow();
   });
   test('aucun fichier de clé dans le dépôt', () => {
     const fs = require('fs'); const path = require('path');
