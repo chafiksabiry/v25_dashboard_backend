@@ -1,0 +1,292 @@
+const mongoose = require('mongoose');
+const { authenticateUser, assertCompanyAccess, callerCompanyId, bearerToken } = require('./companyScope');
+
+/**
+ * Contrôle d'accès des routes du tableau de bord (prospects, fichiers de contacts, Zoho, Vertex, Speech-to-Text, appels).
+ *
+ * Deux groupes de routes, comme le service des appels (v25_dash_calls_backend, middleware/callsAccess.js) :
+ *
+ *  - STRICT (`strictAuth`) : aucun appelant connu sans jeton. Jeton de connexion (JWT du service d'inscription) exigé, tant que
+ *    DASHBOARD_REQUIRE_AUTH n'est pas explicitement `false` (retour de secours).
+ *  - COMPATIBILITÉ (`compatAuth`) : des applications non migrées appellent encore sans jeton, ou avec l'ancien en-tête
+ *    `Authorization: Bearer <gigId>:<userId>` (forgeable, ce n'est PAS une preuve d'identité). Avec un vrai jeton (JWT), le
+ *    contrôle est complet : 401 si le jeton est invalide, 403 si la donnée appartient à une autre entreprise. Sans JWT, la requête
+ *    est tolérée et journalisée tant que DASHBOARD_LEGACY_ANON n'est pas `false` (défaut : tolérée, pour ne pas casser la recette).
+ *    À passer à `false` dès que les applications listées dans la PR envoient le jeton.
+ *
+ * Appartenance : l'entreprise d'un utilisateur est lue chez le service d'inscription (REGISTRATION_BACKEND_URL). Un rep (agent)
+ * n'est pas membre de l'entreprise : il accède aux prospects d'un gig s'il y est inscrit (service de matching, MATCHING_API_URL).
+ */
+
+const OBJECT_ID = /^[a-f0-9]{24}$/i;
+const JWT_SHAPE = /^[\w-]+\.[\w-]+\.[\w-]+$/;
+const ENROLL_TTL_MS = 60 * 1000;
+const LOOKUP_TIMEOUT_MS = 4000;
+const enrollCache = new Map();
+
+function flag(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || String(raw).trim() === '') return fallback;
+  return !/^(false|0|off|no)$/i.test(String(raw).trim());
+}
+const requireAuth = () => flag('DASHBOARD_REQUIRE_AUTH', true);
+const legacyAnon = () => flag('DASHBOARD_LEGACY_ANON', true);
+const hasJwt = (req) => JWT_SHAPE.test(bearerToken(req));
+
+function deny(res, status, message) {
+  return res.status(status).json({ success: false, message });
+}
+
+function sendScopeError(res, error) {
+  if (error && error.status) return deny(res, error.status, error.message);
+  console.error('[access]', error && error.message);
+  return deny(res, 500, 'Access check failed');
+}
+
+/** Routes dont aucun appelant connu n'appelle sans jeton. */
+function strictAuth(req, res, next) {
+  if (!requireAuth()) {
+    req.legacyAccess = true;
+    return next();
+  }
+  return authenticateUser(req, res, next);
+}
+
+/** Routes encore appelées sans jeton (ou avec l'ancien en-tête gigId:userId). Vrai jeton présent = contrôle complet. */
+function compatAuth(req, res, next) {
+  if (hasJwt(req)) return authenticateUser(req, res, next);
+  if (requireAuth() && !legacyAnon()) return deny(res, 401, 'Authentication required');
+  req.legacyAccess = true;
+  console.warn(`[dashboard-auth] requête sans jeton tolérée (compat) ${req.method} ${String(req.originalUrl || '').split('?')[0]}`);
+  return next();
+}
+
+async function findRaw(collection, id, projection) {
+  const raw = String(id || '');
+  if (!raw) return null;
+  const or = [{ _id: raw }];
+  if (mongoose.Types.ObjectId.isValid(raw)) or.push({ _id: new mongoose.Types.ObjectId(raw) });
+  return mongoose.connection.db.collection(collection).findOne({ $or: or }, { projection });
+}
+const idOf = (v) => (v ? String(v.$oid || v._id || v) : null);
+
+function matchingOrigin() {
+  const explicit = process.env.MATCHING_API_URL;
+  const railway = process.env.RAILWAY_SERVICE_V25_MATCHING_BACKEND_URL;
+  const raw = explicit || (railway ? (/^https?:\/\//i.test(railway) ? railway : `https://${railway}`) : '');
+  const base = raw.replace(/\/+$/, '');
+  return base && !/\/api$/.test(base) ? `${base}/api` : base;
+}
+
+/** Profil rep (agent) du porteur du jeton, null s'il n'en a pas. */
+async function ownAgentId(req) {
+  if (!req.auth) return null;
+  if (req.auth.agentId !== undefined) return req.auth.agentId;
+  const or = [{ userId: req.auth.userId }];
+  if (mongoose.Types.ObjectId.isValid(req.auth.userId)) or.push({ userId: new mongoose.Types.ObjectId(req.auth.userId) });
+  const agent = await mongoose.connection.db.collection('agents').findOne({ $or: or }, { projection: { _id: 1 } });
+  req.auth.agentId = agent ? String(agent._id) : null;
+  return req.auth.agentId;
+}
+
+/** Le rep est-il inscrit (statut enrolled) à ce gig ? */
+async function agentEnrolledInGig(agentId, gigId) {
+  const key = `${agentId}:${gigId}`;
+  const cached = enrollCache.get(key);
+  if (cached && cached.expires > Date.now()) return cached.ok;
+  const origin = matchingOrigin();
+  if (!origin) {
+    console.warn('[access] MATCHING_API_URL absent : un rep connecté est admis sur tout gig (inscription non vérifiable)');
+    return true;
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), LOOKUP_TIMEOUT_MS);
+  try {
+    const res = await fetch(`${origin}/gig-agents/agents/${encodeURIComponent(agentId)}/gigs?status=enrolled`, { signal: controller.signal });
+    if (!res.ok) throw Object.assign(new Error('Enrollment lookup failed'), { status: 503 });
+    const payload = await res.json();
+    const gigs = Array.isArray(payload && payload.gigs) ? payload.gigs : [];
+    const ok = gigs.some((row) => String((row && row.gig && (row.gig._id || row.gig.$oid)) || (row && row.gigId) || '') === String(gigId));
+    enrollCache.set(key, { ok, expires: Date.now() + ENROLL_TTL_MS });
+    return ok;
+  } catch (error) {
+    if (error.status) throw error;
+    throw Object.assign(new Error('Enrollment lookup failed'), { status: 503 });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** Membre de l'entreprise (403 sinon). */
+async function isMember(req, companyId) {
+  if (!companyId) return false;
+  try {
+    await assertCompanyAccess(req, companyId);
+    return true;
+  } catch (error) {
+    if (error && error.status === 403) return false;
+    throw error;
+  }
+}
+
+/**
+ * Accès à un gig : membre de l'entreprise du gig, ou (si `allowReps`) rep inscrit au gig.
+ * @returns {Promise<'ok'|'not_found'|'forbidden'>}
+ */
+async function gigAccess(req, gigId, { allowReps = true } = {}) {
+  const gig = await findRaw('gigs', gigId, { companyId: 1 });
+  if (!gig) return 'not_found';
+  if (await isMember(req, idOf(gig.companyId))) return 'ok';
+  if (allowReps) {
+    const agentId = await ownAgentId(req);
+    if (agentId && (await agentEnrolledInGig(agentId, idOf(gig._id)))) return 'ok';
+  }
+  return 'forbidden';
+}
+
+/** :companyId dans l'URL : l'appelant doit appartenir à cette entreprise. */
+function guardCompanyParam(param = 'companyId') {
+  return async (req, res, next) => {
+    if (!req.auth) return next();
+    const companyId = req.params[param];
+    if (!OBJECT_ID.test(String(companyId || ''))) return deny(res, 400, 'Valid companyId is required');
+    try {
+      await assertCompanyAccess(req, companyId);
+      return next();
+    } catch (error) {
+      return sendScopeError(res, error);
+    }
+  };
+}
+
+/** Gig désigné par l'URL ou le corps : membre de l'entreprise du gig, ou rep inscrit (si allowReps). */
+function guardGig(pick, options = {}) {
+  return async (req, res, next) => {
+    if (!req.auth) return next();
+    const gigIds = [].concat(pick(req) || []).map((g) => String(g || '').trim()).filter(Boolean);
+    if (!gigIds.length) return options.required === false ? next() : deny(res, 400, 'gigId is required');
+    try {
+      for (const gigId of new Set(gigIds)) {
+        const out = await gigAccess(req, gigId, options);
+        if (out === 'not_found') return deny(res, 404, 'Gig not found');
+        if (out === 'forbidden') return deny(res, 403, 'Not allowed for this gig');
+      }
+      return next();
+    } catch (error) {
+      return sendScopeError(res, error);
+    }
+  };
+}
+
+/** Prospect :id : membre de l'entreprise du prospect (ou de son gig), ou rep inscrit au gig du prospect (si allowReps). */
+function guardLeadParam(param = 'id', options = {}) {
+  const allowReps = options.allowReps !== false;
+  return async (req, res, next) => {
+    if (!req.auth) return next();
+    const leadId = req.params[param];
+    if (!OBJECT_ID.test(String(leadId || ''))) return deny(res, 400, 'Valid lead id is required');
+    try {
+      const lead = await findRaw('leads', leadId, { companyId: 1, gigId: 1 });
+      if (!lead) return deny(res, 404, 'Lead not found');
+      if (await isMember(req, idOf(lead.companyId))) return next();
+      if (lead.gigId) {
+        const out = await gigAccess(req, idOf(lead.gigId), { allowReps });
+        if (out === 'ok') return next();
+      }
+      return deny(res, 403, 'Not allowed for this lead');
+    } catch (error) {
+      return sendScopeError(res, error);
+    }
+  };
+}
+
+/** :userId dans l'URL : uniquement le porteur du jeton. */
+function guardSelfParam(param = 'userId') {
+  return (req, res, next) => {
+    if (!req.auth) return next();
+    if (String(req.params[param] || '') !== req.auth.userId) return deny(res, 403, 'Not allowed for this user');
+    return next();
+  };
+}
+
+/** Listes globales (GET /leads, /leads/filter) : cantonnées à l'entreprise de l'appelant (req.scopeCompanyId). */
+async function scopeToCallerCompany(req, res, next) {
+  if (!req.auth) return next();
+  try {
+    const mine = await callerCompanyId(req.auth);
+    if (!mine) return deny(res, 403, 'Not allowed for this company');
+    req.scopeCompanyId = mine;
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
+
+/** Appel :id : membre de l'entreprise de l'appel, ou rep qui l'a passé. */
+function guardCallParam(param = 'id') {
+  return async (req, res, next) => {
+    if (!req.auth) return next();
+    const callId = req.params[param];
+    if (!OBJECT_ID.test(String(callId || ''))) return deny(res, 400, 'Valid call id is required');
+    try {
+      const call = await findRaw('calls', callId, { companyId: 1, agent: 1 });
+      if (!call) return deny(res, 404, 'Call not found');
+      if (await isMember(req, idOf(call.companyId))) return next();
+      const agentId = await ownAgentId(req);
+      if (agentId && call.agent && idOf(call.agent) === agentId) return next();
+      return deny(res, 403, 'Not allowed for this call');
+    } catch (error) {
+      return sendScopeError(res, error);
+    }
+  };
+}
+
+/**
+ * Liste d'appels (GET /calls, /calls/gigs) : companyId de l'appelant, userId = lui-même, agentId = son profil rep.
+ * Sans filtre, la liste est cantonnée à l'entreprise de l'appelant (ou à son profil rep).
+ */
+async function guardCallsQuery(req, res, next) {
+  if (!req.auth) {
+    const q = req.query || {};
+    if (!['companyId', 'userId', 'agentId', 'leadId', 'gigId'].some((k) => q[k])) return deny(res, 401, 'Authentication required');
+    return next();
+  }
+  const q = req.query || {};
+  try {
+    if (q.companyId) await assertCompanyAccess(req, q.companyId);
+    if (q.userId && String(q.userId) !== req.auth.userId) return deny(res, 403, 'Not allowed for this user');
+    if (q.agentId && String(q.agentId) !== String(await ownAgentId(req))) return deny(res, 403, 'Not allowed for this agent');
+    if (!q.companyId && !q.userId && !q.agentId) {
+      const mine = await callerCompanyId(req.auth);
+      if (mine) req.query = { ...q, companyId: mine };
+      else {
+        const agentId = await ownAgentId(req);
+        if (!agentId) return deny(res, 403, 'Not allowed for this company');
+        req.query = { ...q, agentId };
+      }
+    }
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
+function clearEnrollCache() {
+  enrollCache.clear();
+}
+
+module.exports = {
+  strictAuth,
+  compatAuth,
+  guardCompanyParam,
+  guardGig,
+  guardLeadParam,
+  guardSelfParam,
+  scopeToCallerCompany,
+  guardCallParam,
+  guardCallsQuery,
+  requireAuth,
+  legacyAnon,
+  clearEnrollCache,
+};

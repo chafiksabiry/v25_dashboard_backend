@@ -32,13 +32,16 @@ const {
 const zohoService = require('../services/zoho.service');
 const ZohoConfig = require('../models/ZohoConfig');
 const { zohoTokenMiddleware, requireZohoConfig } = require('../middleware/zohoTokenMiddleware');
+const access = require('../middleware/access');
 
 const router = express.Router();
 
 // Configuration et authentification
-router.post('/configure', configureZohoCRM);
-router.post('/token', getTokenWithCredentials);
-router.post('/disconnect', disconnect);
+// Contrôle d'accès : voir middleware/access.js. Les routes de données Zoho (zohoTokenMiddleware) lisent encore l'ancien en-tête
+// « Bearer <gigId>:<userId> » : non modifiées ici (voir PR, à refondre avec le jeton de connexion).
+router.post('/configure', access.compatAuth, configureZohoCRM);
+router.post('/token', access.compatAuth, getTokenWithCredentials);
+router.post('/disconnect', access.compatAuth, disconnect);
 
 router.get('/auth', async (req, res) => {
   try {
@@ -179,7 +182,7 @@ router.post('/emails/:id/archive', zohoTokenMiddleware, requireZohoConfig, archi
 router.get('/check-configuration', zohoTokenMiddleware, requireZohoConfig, checkConfiguration);
 router.get('/pipelines', zohoTokenMiddleware, requireZohoConfig, getPipelines);
 
-router.get('/config/user/:userId', async (req, res) => {
+router.get('/config/user/:userId', access.compatAuth, access.guardSelfParam('userId'), async (req, res) => {
   try {
     const { userId } = req.params;
     const config = await ZohoConfig.findOne({ userId });
@@ -192,10 +195,11 @@ router.get('/config/user/:userId', async (req, res) => {
   }
 });
 
-router.get('/config/:id', getZohoConfigById);
-router.get('/configs', getAllZohoConfigs);
+// Configurations (jetons Zoho) de tous les utilisateurs : aucun appelant connu, jeton exigé.
+router.get('/config/:id', access.strictAuth, getZohoConfigById);
+router.get('/configs', access.strictAuth, getAllZohoConfigs);
 
-router.post('/config/user/:userId/refresh-token', async (req, res) => {
+router.post('/config/user/:userId/refresh-token', access.compatAuth, access.guardSelfParam('userId'), async (req, res) => {
   try {
     const { userId } = req.params;
     const config = await ZohoConfig.findOne({ userId });
