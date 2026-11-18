@@ -176,12 +176,28 @@ describe('écoute : entreprise principale seulement (agent multi-centres)', () =
     expect(own.recording_url).toBe(TWILIO);
     expect(other.recording_url).toBeNull();
     expect(other.recording_url_cloudinary).toBeNull();
-    expect(unknown.recording_url).toBe(TWILIO);
-    expect((await applyRecordingAccess(req, callDoc({ companyId: COMPANY }))).recording_url).toBeNull();
+    expect(unknown.recording_url).toBeNull();
+  });
+  test('appel sans entreprise : URL seulement pour l’appelant qui l’a passé (rep indépendant)', async () => {
+    const { applyRecordingAccess } = require('../utils/recordingAccess');
+    const own = { auth: { userId: 'rep1' }, canListenRecordings: true, listenCompanyId: null, recordingAgentId: 'agent-rep1' };
+    expect((await applyRecordingAccess(own, callDoc({ companyId: null, agent: { _id: 'agent-rep1' } }))).recording_url).toBe(TWILIO);
+    expect((await applyRecordingAccess(own, callDoc({ companyId: null, userId: 'rep1' }))).recording_url).toBe(TWILIO);
+    expect((await applyRecordingAccess(own, callDoc({ companyId: null, agent: 'agent-autre' }))).recording_url).toBeNull();
+    expect((await applyRecordingAccess(own, callDoc({ companyId: COMPANY }))).recording_url).toBeNull();
   });
   test('/api/calls d’une entreprise atteinte par un emploi : refusée (accès membre réservé à l’entreprise principale)', async () => {
     SESSIONS.multi = { isOwner: true, companyId: OTHER, permissions: { 'calls.listen': true }, employments: [{ companyId: COMPANY, status: 'active' }] };
     expect((await get(`/api/calls?companyId=${COMPANY}`, token('multi'))).status).toBe(403);
     expect((await get(`/api/calls/${CALL_ID}`, token('multi'))).status).toBe(403);
+  });
+});
+
+describe('analytics et dashboard : refusés à un agent CLOUD', () => {
+  test('agent : 403 ; titulaire : 200', async () => {
+    for (const path of ['/api/analytics/calls', '/api/analytics/overview', '/api/dashboard/live-calls', '/api/dashboard/stats']) {
+      expect((await get(path, token('agent-flagged-owner'))).status).toBe(403);
+    }
+    expect((await get('/api/analytics/calls', token('owner'))).status).not.toBe(403);
   });
 });

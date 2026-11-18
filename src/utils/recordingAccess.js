@@ -54,6 +54,19 @@ async function callerPrimaryCompany(req) {
   return req.listenCompanyId;
 }
 
+const idOfRef = (v) => (v ? String((v && (v._id || v.$oid)) || v) : null);
+
+/** Profil rep de l'appelant (même lecture que middleware/access.js), mémorisé sur la requête ; null sinon. */
+async function callerAgentId(req) {
+  if (!req || !req.auth) return null;
+  if (req.recordingAgentId !== undefined) return req.recordingAgentId;
+  try {
+    const { ownAgentId } = require('../middleware/access');
+    req.recordingAgentId = (await ownAgentId(req)) || null;
+  } catch { req.recordingAgentId = null; }
+  return req.recordingAgentId;
+}
+
 const companyOfCall = (call) => {
   const c = call && (call.companyId && (call.companyId._id || call.companyId));
   return c ? String(c) : null;
@@ -67,9 +80,15 @@ const companyOfCall = (call) => {
 async function applyRecordingAccess(req, data) {
   if (!(await callerCanListen(req))) return Array.isArray(data) ? data.map(stripRecording) : stripRecording(data);
   const primary = await callerPrimaryCompany(req);
+  const mine = await callerAgentId(req);
   const one = (call) => {
     const company = companyOfCall(call);
-    return company && company !== primary ? stripRecording(call) : call;
+    if (company) return company !== primary ? stripRecording(call) : call;
+    // Appel sans entreprise : seulement l'appelant qui l'a passé (rep indépendant sur ses propres appels).
+    const agent = idOfRef(call && call.agent);
+    const user = idOfRef(call && call.userId);
+    const own = (mine && agent === mine) || (req.auth && user === req.auth.userId);
+    return own ? call : stripRecording(call);
   };
   return Array.isArray(data) ? data.map(one) : one(data);
 }

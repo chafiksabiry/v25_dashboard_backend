@@ -313,9 +313,15 @@ function guardCallParam(param = 'id') {
     try {
       const call = await findRaw('calls', callId, { companyId: 1, agent: 1 });
       if (!call) return deny(res, 404, 'Call not found');
-      if (await isMember(req, idOf(call.companyId))) return next();
+      if (await isMember(req, idOf(call.companyId))) {
+        req.callAccess = (await isCloudAgent(req)) ? 'agent' : 'member';
+        return next();
+      }
       const agentId = await ownAgentId(req);
-      if (agentId && call.agent && idOf(call.agent) === agentId) return next();
+      if (agentId && call.agent && idOf(call.agent) === agentId) {
+        req.callAccess = 'rep';
+        return next();
+      }
       return deny(res, 403, 'Not allowed for this call');
     } catch (error) {
       return sendScopeError(res, error);
@@ -335,6 +341,14 @@ async function guardCallsQuery(req, res, next) {
   }
   const q = req.query || {};
   try {
+    // Agent CLOUD : jamais la liste de l'entreprise ; seulement ses propres appels (identifiant d'acteur, même règle que les prospects).
+    if (await isCloudAgent(req)) {
+      const own = { ...q };
+      delete own.companyId; delete own.userId;
+      own.agentId = await actorId(req, { agentLevel: true });
+      req.query = own;
+      return next();
+    }
     if (q.companyId) await assertCompanyAccess(req, q.companyId);
     if (q.userId && String(q.userId) !== req.auth.userId) return deny(res, 403, 'Not allowed for this user');
     if (q.agentId && String(q.agentId) !== String(await ownAgentId(req))) return deny(res, 403, 'Not allowed for this agent');
@@ -347,6 +361,73 @@ async function guardCallsQuery(req, res, next) {
         req.query = { ...q, agentId };
       }
     }
+    return next();
+  } catch (error) {
+    return sendScopeError(res, error);
+  }
+}
+
+/** Clés d'opérateur MongoDB ($set, $unset, $rename…) ou chemins pointés, à toute profondeur. */
+function unsafeKeys(value, allowTop = new Set(), depth = 0) {
+  if (!value || typeof value !== 'object') return [];
+  const out = [];
+  for (const [k, v] of Object.entries(value)) {
+    if (k.startsWith('$') || (k.includes('.') && !(depth === 0 && allowTop.has(k)))) out.push(k);
+    out.push(...unsafeKeys(v, new Set(), depth + 1));
+  }
+  return out;
+}
+
+// Seules clés pointées acceptées au premier niveau (contrat existant des fronts entreprise et rep : PUT { 'transaction.validByCompany' }).
+const TX_DOTTED = new Set(['transaction.validByReps', 'transaction.validByCompany']);
+const RECORDING_KEYS = ['recording_url', 'recording_url_cloudinary'];
+
+/**
+ * Modification d'un appel (PUT /calls/:id, après guardCallParam) :
+ *  - toute clé $… ou pointée (sauf transaction.validByReps / transaction.validByCompany au premier niveau) : 400 ;
+ *  - transaction : seulement validByReps / validByCompany, booléen ou null ;
+ *  - companyId n'est jamais modifiable ; agent, recording_url*, transaction.validByCompany : gestionnaire seulement ;
+ *  - rep (son propre appel) : transaction.validByReps seulement (403 sinon) ; agent CLOUD : refusé en amont (membersOnly).
+ */
+function guardCallUpdate(req, res, next) {
+  const body = req.body && typeof req.body === 'object' ? req.body : {};
+  const bad = unsafeKeys(body, TX_DOTTED);
+  if (bad.length) return deny(res, 400, `Invalid keys: ${bad.join(', ')}`);
+  const tx = { ...(body.transaction && typeof body.transaction === 'object' ? body.transaction : {}) };
+  for (const k of TX_DOTTED) if (k in body) { tx[k.split('.')[1]] = body[k]; delete body[k]; }
+  if (body.transaction !== undefined || Object.keys(tx).length) {
+    const extra = Object.keys(tx).filter((k) => k !== 'validByReps' && k !== 'validByCompany');
+    if (extra.length || Object.values(tx).some((v) => v !== null && typeof v !== 'boolean')) return deny(res, 400, 'Invalid transaction');
+    body.transaction = tx;
+  }
+  delete body.companyId;
+  const manager = Boolean(req.auth) && req.callAccess === 'member';
+  if (req.callAccess === 'rep') {
+    const keys = Object.keys(body);
+    if (keys.some((k) => k !== 'transaction') || Object.keys(body.transaction || {}).some((k) => k !== 'validByReps')) return deny(res, 403, 'A rep can only set transaction.validByReps');
+  } else if (!manager) {
+    delete body.agent;
+    for (const k of RECORDING_KEYS) delete body[k];
+    if (body.transaction) {
+      delete body.transaction.validByCompany;
+      if (!Object.keys(body.transaction).length) delete body.transaction;
+    }
+  }
+  req.body = body;
+  return next();
+}
+
+/** Création d'un appel (POST /calls) avec un jeton : companyId = entreprise principale de la session (refus si le corps en donne une autre). */
+async function pinCallCompany(req, res, next) {
+  if (!req.auth) return next();
+  try {
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const bad = unsafeKeys(body);
+    if (bad.length) return deny(res, 400, `Invalid keys: ${bad.join(', ')}`);
+    const mine = await callerCompanyId(req.auth);
+    if (body.companyId && String(body.companyId) !== String(mine || '')) return deny(res, 403, 'Not allowed for this company');
+    if (mine) body.companyId = mine;
+    req.body = body;
     return next();
   } catch (error) {
     return sendScopeError(res, error);
@@ -435,6 +516,8 @@ async function guardLeadUpdate(req, res, next) {
     req.body = checked.value;
     return next();
   }
+  const bad = unsafeKeys(body);
+  if (bad.length) return deny(res, 400, `Invalid keys: ${bad.join(', ')}`);
   try {
     delete body.companyId;
     delete body.userId;
@@ -502,6 +585,9 @@ module.exports = {
   guardLeadUpdate,
   pinAgentFromToken,
   pinListAgent,
+  guardCallUpdate,
+  pinCallCompany,
+  ownAgentId,
   membersOnly,
   guardCallsQuery,
   requireAuth,
