@@ -1,5 +1,5 @@
 const express = require("express");
-const { protect } = require("../middleware/auth");
+const access = require("../middleware/access");
 const { Lead } = require("../models/Lead");
 const {
   getLeads,
@@ -33,7 +33,17 @@ const multer = require("multer");
 const storage = multer.memoryStorage(); // Stockage en mémoire
 const upload = multer({ storage: storage });
 
-router.post("/upload-csv", upload.single("file"), async (req, res) => {
+// Contrôle d'accès : voir middleware/access.js (strict = jeton exigé ; compat = jeton contrôlé s'il est présent, sans jeton
+// toléré tant que DASHBOARD_LEGACY_ANON n'est pas false). Gigs et prospects : membre de l'entreprise, ou rep inscrit au gig.
+const gigOfBody = (req) => (req.body && req.body.gigId) || (req.query && req.query.gigId);
+const gigsOfBulk = (req) => {
+  const b = req.body || {};
+  const fromLeads = Array.isArray(b.leads) ? b.leads.map((l) => l && l.gigId).filter(Boolean) : [];
+  return [b.gigId, ...fromLeads].filter(Boolean);
+};
+
+// Import CSV sans gig ni entreprise : aucun appelant connu dans les applications actuelles -> jeton exigé.
+router.post("/upload-csv", access.strictAuth, upload.single("file"), async (req, res) => {
   try {
     if (!req.file) {
       return res
@@ -113,25 +123,30 @@ router.post("/upload-csv", upload.single("file"), async (req, res) => {
 });
 
 
-router.route("/").get(getLeads).post(createLead);
-router.post("/bulk", createLeadsBulk); // Add bulk creation route BEFORE /:id routes
-router.post("/archive", archiveLeads);
-router.post("/:id/archive", archiveLead);
-router.post("/:id/cockpit-claim", claimCockpit);
-router.post("/:id/cockpit-release", releaseCockpit);
-router.put("/:id/disposition", setDisposition);
-router.put("/:id/disposition/confirm", confirmDisposition);
-router.route("/:id").get(getLead).put(updateLead).delete(deleteLead);
-router.route("/:id/analyze").post(analyzeLead);
-router.route("/:id/generate-script").post(generateScript);
-router.route("/user/:userId").get(getLeadsByUserId);
-router.route("/filter").get(getLeadsByPipelineAndStage);
-router.route("/gig/:gigId").get(getLeadsByGigId);
-router.route("/gig/:gigId/search").get(searchLeadsByGigId);
-router.route("/company/:companyId/has-leads").get(hasCompanyLeads);
-router.route("/company/:companyId/stats").get(getCompanyLeadStats);
-router.route("/company/:companyId/rep-coverage").get(getCompanyRepCoverage);
-
-
+// Liste globale : jeton exigé, cantonnée à l'entreprise de l'appelant.
+router.route("/")
+  .get(access.strictAuth, access.scopeToCallerCompany, getLeads)
+  .post(access.compatAuth, access.guardGig(gigOfBody, { allowReps: false }), access.pinCreatedLeadsCompany, createLead);
+router.post("/bulk", access.compatAuth, access.guardGig(gigsOfBulk, { allowReps: false }), access.pinCreatedLeadsCompany, createLeadsBulk); // Add bulk creation route BEFORE /:id routes
+router.post("/archive", access.compatAuth, access.guardGig(gigOfBody, { allowReps: false }), archiveLeads);
+// Avant /:id (sinon « filter » est pris pour un identifiant).
+router.route("/filter").get(access.strictAuth, access.scopeToCallerCompany, getLeadsByPipelineAndStage);
+router.post("/:id/archive", access.compatAuth, access.guardLeadParam("id", { allowReps: false }), archiveLead);
+router.post("/:id/cockpit-claim", access.compatAuth, access.guardLeadParam("id"), access.pinAgentFromToken, claimCockpit);
+router.post("/:id/cockpit-release", access.compatAuth, access.guardLeadParam("id"), access.pinAgentFromToken, releaseCockpit);
+router.put("/:id/disposition", access.compatAuth, access.guardLeadParam("id"), access.pinAgentFromToken, setDisposition);
+router.put("/:id/disposition/confirm", access.compatAuth, access.guardLeadParam("id"), confirmDisposition);
+router.route("/:id")
+  .get(access.compatAuth, access.guardLeadParam("id"), getLead)
+  .put(access.compatAuth, access.guardLeadParam("id"), access.guardLeadUpdate, updateLead)
+  .delete(access.compatAuth, access.guardLeadParam("id", { allowReps: false }), deleteLead);
+router.route("/:id/analyze").post(access.compatAuth, access.guardLeadParam("id"), analyzeLead);
+router.route("/:id/generate-script").post(access.compatAuth, access.guardLeadParam("id"), generateScript);
+router.route("/user/:userId").get(access.compatAuth, access.guardSelfParam("userId"), getLeadsByUserId);
+router.route("/gig/:gigId").get(access.compatAuth, access.guardGig((req) => req.params.gigId), getLeadsByGigId);
+router.route("/gig/:gigId/search").get(access.compatAuth, access.guardGig((req) => req.params.gigId), searchLeadsByGigId);
+router.route("/company/:companyId/has-leads").get(access.compatAuth, access.guardCompanyParam(), hasCompanyLeads);
+router.route("/company/:companyId/stats").get(access.compatAuth, access.guardCompanyParam(), getCompanyLeadStats);
+router.route("/company/:companyId/rep-coverage").get(access.compatAuth, access.guardCompanyParam(), getCompanyRepCoverage);
 
 module.exports = router;

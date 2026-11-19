@@ -1,2 +1,10 @@
 node_modules/
 .env
+
+# Clés Google Cloud : jamais dans le dépôt (les identifiants passent par les variables d'environnement JSON)
+src/config/vertexServiceAccount.json
+src/config/speechToTextServiceAccount.json
+temp/
+*service-account*.json
+*ServiceAccount*.json
+*-credentials.json

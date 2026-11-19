@@ -3,6 +3,7 @@ const multer = require('multer');
 const XLSX = require('xlsx');
 const mongoose = require('mongoose');
 const { Gig } = require('../models/Gig');
+const access = require('../middleware/access');
 const router = express.Router();
 
 /** HARX lead fields exposed in the column-mapping UI (no Stage/Pipeline). */
@@ -351,6 +352,11 @@ function fileToCsvContent(file) {
  * Endpoint de test pour vérifier la communication frontend-backend
  * GET /api/file-processing/test
  */
+// Contrôle d'accès : voir middleware/access.js (groupe compat : les applications entreprise appellent encore sans jeton).
+// Avec un jeton : gig de l'entreprise de l'appelant ; visibilité et variables de script lisibles aussi par un rep inscrit au gig.
+const gigOfReq = (req) => (req.body && req.body.gigId) || (req.query && req.query.gigId);
+const gigOfParam = (req) => req.params.gigId;
+
 router.get('/test', (req, res) => {
   console.log('🔍 Test endpoint called');
   res.json({
@@ -374,7 +380,7 @@ const upload = multer({
  * Endpoint pour traiter les fichiers avec OpenAI
  * POST /api/file-processing/process
  */
-router.post('/process', upload.single('file'), async (req, res) => {
+router.post('/process', access.compatAuth, upload.single('file'), access.guardGig(gigOfReq, { allowReps: false, required: false }), async (req, res) => {
   // Set long timeout for file processing
   req.setTimeout(30000); // 5 minutes
   res.setTimeout(30000); // 5 minutes
@@ -1692,7 +1698,7 @@ function tryRecoverIncompleteJSON(content, expectedLeads) {
  * POST /api/file-processing/analyze
  * Optional form field: gigId — merges saved mapping for that gig.
  */
-router.post('/analyze', upload.single('file'), async (req, res) => {
+router.post('/analyze', access.compatAuth, upload.single('file'), access.guardGig(gigOfReq, { allowReps: false, required: false }), async (req, res) => {
   try {
     const file = req.file;
     if (!file) {
@@ -1761,7 +1767,7 @@ router.post('/analyze', upload.single('file'), async (req, res) => {
  * POST /api/file-processing/apply-mapping
  * Form fields: file, mapping (JSON string header→HARX field), gigId (optional, persists mapping)
  */
-router.post('/apply-mapping', upload.single('file'), async (req, res) => {
+router.post('/apply-mapping', access.compatAuth, upload.single('file'), access.guardGig(gigOfReq, { allowReps: false, required: false }), async (req, res) => {
   req.setTimeout(30000);
   res.setTimeout(30000);
 
@@ -1916,7 +1922,7 @@ router.post('/apply-mapping', upload.single('file'), async (req, res) => {
 /**
  * GET /api/file-processing/mapping/:gigId
  */
-router.get('/mapping/:gigId', async (req, res) => {
+router.get('/mapping/:gigId', access.compatAuth, access.guardGig(gigOfParam, { allowReps: false }), async (req, res) => {
   try {
     const mapping = await readGigImportMapping(req.params.gigId);
     const visibility = await readGigLeadFieldVisibility(req.params.gigId);
@@ -1939,7 +1945,7 @@ router.get('/mapping/:gigId', async (req, res) => {
  * PUT /api/file-processing/mapping/:gigId
  * Body: { mapping?, visibility?, customFieldLabels?: { [header]: displayTitle } }
  */
-router.put('/mapping/:gigId', async (req, res) => {
+router.put('/mapping/:gigId', access.compatAuth, access.guardGig(gigOfParam, { allowReps: false }), async (req, res) => {
   try {
     const mapping = req.body?.mapping || {};
     const visibility = req.body?.visibility || null;
@@ -1960,7 +1966,7 @@ router.put('/mapping/:gigId', async (req, res) => {
  * GET /api/file-processing/visibility/:gigId
  * Used by company UI and REP front to know which lead fields to show.
  */
-router.get('/visibility/:gigId', async (req, res) => {
+router.get('/visibility/:gigId', access.compatAuth, access.guardGig(gigOfParam), async (req, res) => {
   try {
     const visibility = await readGigLeadFieldVisibility(req.params.gigId);
     return res.json({
@@ -1991,7 +1997,7 @@ const HARX_FIELD_LABELS_FR = {
  * GET /api/file-processing/script-variables/:gigId
  * Catalog of contact variables for call scripts (mapped HARX + customFields).
  */
-router.get('/script-variables/:gigId', async (req, res) => {
+router.get('/script-variables/:gigId', access.compatAuth, access.guardGig(gigOfParam), async (req, res) => {
   try {
     const gigId = req.params.gigId;
     if (!gigId || !mongoose.Types.ObjectId.isValid(String(gigId))) {

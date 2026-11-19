@@ -401,12 +401,14 @@ exports.getLeads = async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
 
-    const leads = await Lead.find()
+    // Jamais tous les prospects de toutes les entreprises : entreprise de l'appelant (middleware access.scopeToCallerCompany).
+    const filter = req.scopeCompanyId ? { companyId: new mongoose.Types.ObjectId(req.scopeCompanyId) } : {};
+    const leads = await Lead.find(filter)
       .populate("assignedTo")
       .skip(skip)
       .limit(limit);
 
-    const total = await Lead.countDocuments();
+    const total = await Lead.countDocuments(filter);
 
     res.status(200).json({
       success: true,
@@ -920,7 +922,8 @@ exports.getLeadsByPipelineAndStage = async (req, res) => {
     // Build the query
     const query = {
       Pipeline: pipeline,
-      Stage: stage
+      Stage: stage,
+      ...(req.scopeCompanyId ? { companyId: new mongoose.Types.ObjectId(req.scopeCompanyId) } : {})
     };
 
     // Get total count for pagination
