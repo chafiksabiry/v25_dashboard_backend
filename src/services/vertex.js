@@ -3,11 +3,12 @@ const { generateCallScoringPrompt } = require('../prompts/call-scoring-prompt');
 const { generateCallPostActionsPrompt } = require('../prompts/call-action-plan');
 const { generateAudioSummaryPrompt } = require('../prompts/call-summary-prompt');
 const { parseCleanJson } = require('../parsers/parse-call-scoring-result');
-const { VERTEX_VARS, googleAuthOptions } = require('./gcpCredentials');
+const { VERTEX_VARS, googleAuthOptions, isCredentialsError } = require('./gcpCredentials');
 
 /**
  * Vertex AI (Gemini) : même logique que le service des appels (v25_dash_calls_backend, vertexai.service.js, PR #37).
- *  - Identifiants : VERTEX_AI_CREDENTIALS (JSON du compte de service, voir gcpCredentials.js), sinon ADC. Aucun fichier de clé.
+ *  - Identifiants : VERTEX_AI_CREDENTIALS (JSON du compte de service, voir gcpCredentials.js), sinon GOOGLE_APPLICATION_CREDENTIALS
+ *    (fichier hors dépôt). Aucun fichier de clé. Sans eux : erreur 503 claire sur les routes Vertex, le serveur démarre.
  *  - Modèle : VERTEX_AI_MODEL s'il est servi, sinon gemini-3.1-flash-lite (gemini-1.5-flash-002 est retiré depuis le 24/09/2025).
  *  - Emplacement : VERTEX_AI_LOCATION (défaut `eu`). `eu`, `us` et `global` exigent un apiEndpoint explicite.
  * Le client est créé au premier appel : sans identifiants, le service démarre et l'appel échoue avec un message clair.
@@ -50,6 +51,7 @@ function vertexClientOptions(env = process.env, logger = console) {
     const project = cleanEnv(env.GOOGLE_CLOUD_PROJECT || env.QAUTH2_PROJECT_ID) || auth.projectId || 'harx-ai';
     return {
         model,
+        ...(auth.configError ? { configError: auth.configError } : {}),
         options: {
             project,
             location,
@@ -65,12 +67,15 @@ function vertexClientOptions(env = process.env, logger = console) {
 let cachedModel = null;
 function getModel() {
     if (!cachedModel) {
-        const { model, options } = vertexClientOptions();
+        const { model, options, configError } = vertexClientOptions();
+        if (configError) throw configError;
         console.log(`🧠 [vertex] Vertex AI : projet ${options.project}, emplacement ${options.location}, modèle ${model}`);
         cachedModel = new VertexAI(options).getGenerativeModel({ model });
     }
     return cachedModel;
 }
+// Avertissement au démarrage si les identifiants manquent (sans exception ; la valeur n'est jamais journalisée).
+if (process.env.NODE_ENV !== 'test') googleAuthOptions(VERTEX_VARS, 'Vertex AI');
 // Compatibilité avec le code existant : `generativeVisionModel.generateContent(...)`.
 const generativeVisionModel = {
     generateContent: (request) => getModel().generateContent(request),
@@ -112,6 +117,7 @@ exports.getAudioSummary = async (file_uri) => {
         return parseCleanJson(aggregatedResponse.candidates[0].content.parts[0].text);
 
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
     }
@@ -142,6 +148,7 @@ exports.getAudioTranscription = async (file_uri) => {
         const aggregatedResponse = result.response;
         return { transcription: aggregatedResponse.candidates[0].content.parts[0].text };
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
     }
@@ -171,6 +178,7 @@ exports.getCallScoring = async (file_uri) => {
         return parseCleanJson(response.candidates[0].content.parts[0].text);
         //return response;
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
     }
@@ -200,6 +208,7 @@ exports.getCallPostActions = async (file_uri) => {
         return parseCleanJson(response.candidates[0].content.parts[0].text);
         //return response;
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Service : Error during generating follow-up actions:", error);
         throw new Error("Audio analyzis failed");
     }
