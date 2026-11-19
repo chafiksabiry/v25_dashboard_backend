@@ -244,6 +244,14 @@ exports.getCalls = async (req, res) => {
     if (leadId) query.lead = leadId;
     if (gigId) query.gigId = gigId;
     if (companyId) query.companyId = companyId;
+    // Agent CLOUD (imposé par access.guardCallsQuery) : ses appels de rep (agent) ou du poste CLOUD (handledBy.userId).
+    if (req.callsOwnerScope) {
+      delete query.agent;
+      const or = [];
+      if (req.callsOwnerScope.agentId && mongoose.Types.ObjectId.isValid(req.callsOwnerScope.agentId)) or.push({ agent: req.callsOwnerScope.agentId });
+      if (mongoose.Types.ObjectId.isValid(req.callsOwnerScope.userId)) or.push({ 'handledBy.userId': new mongoose.Types.ObjectId(req.callsOwnerScope.userId) });
+      query.$or = or.length ? or : [{ _id: null }];
+    }
 
     // Date range filter
     if (startDate || endDate) {

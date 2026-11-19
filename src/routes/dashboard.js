@@ -11,7 +11,7 @@ const {
 const router = express.Router();
 
 // Jeton exigé ; lectures cantonnées à l'entreprise de l'appelant (service d'inscription), jamais un paramètre client.
-router.use(authenticateUser, access.scopeToCallerCompany);
+router.use(authenticateUser, access.membersOnly, access.scopeToCallerCompany);
 
 router.get('/stats', getStats);
 router.get('/live-calls', getLiveCalls);

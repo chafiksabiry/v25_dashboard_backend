@@ -55,8 +55,14 @@ function authenticateUser(req, res, next) {
   }
 }
 
+const idList = (v) => (Array.isArray(v) ? v.map((x) => String((x && (x.companyId || x._id)) || x || '')).filter(Boolean) : []);
+
 /**
- * Session de l'appelant chez le service d'inscription (`GET /api/company-members/me`) : entreprise, titulaire, droits.
+ * Session de l'appelant chez le service d'inscription (`GET /api/company-members/me`), un seul objet pour tous les contrôles :
+ *  - `companyId` : entreprise principale. SEULE entreprise où l'appelant a le niveau « membre » (titulaire, droits, écoute) ;
+ *  - `companyIds` : principale + autres centres d'un agent multi-centres (`companyIds`, emplois `status === 'active'` ; un emploi sans
+ *    statut n'est pas actif). Une entreprise atteinte ainsi ne donne qu'un accès de niveau AGENT (voir middleware/access.js) ;
+ *  - `isOwner`, `isAgent`, `isClient`, `permissions` : tels que /me les renvoie (globaux, valables pour l'entreprise principale).
  * Cache court (CACHE_TTL_MS) par utilisateur. Lève une ScopeError 503 si la session est illisible.
  */
 async function callerSession(auth) {
@@ -75,8 +81,11 @@ async function callerSession(auth) {
     if (!res.ok) throw new ScopeError(503, 'Company lookup failed');
     const payload = await res.json();
     const data = (payload && payload.data) || {};
+    const companyId = data.companyId ? String(data.companyId) : null;
+    const activeEmployments = (Array.isArray(data.employments) ? data.employments : []).filter((e) => e && e.status === 'active');
     const session = {
-      companyId: data.companyId ? String(data.companyId) : null,
+      companyId,
+      companyIds: [...new Set([companyId, ...idList(data.companyIds), ...idList(activeEmployments)].filter(Boolean))],
       isOwner: data.isOwner === true,
       isAgent: data.isAgent === true,
       isClient: data.isClient === true,
@@ -92,11 +101,14 @@ async function callerSession(auth) {
   }
 }
 
+/** Même objet que callerSession (nom employé par les gardes des prospects). */
+const callerMembership = callerSession;
+
 async function callerCompanyId(auth) {
   return (await callerSession(auth)).companyId;
 }
 
-/** Throws a ScopeError unless the authenticated caller belongs to `companyId`. */
+/** Throws a ScopeError unless the authenticated caller is a MEMBER of `companyId` (entreprise principale seulement). */
 async function assertCompanyAccess(req, companyId) {
   if (!req.auth) throw new ScopeError(401, 'Authentication required');
   const mine = await callerCompanyId(req.auth);
@@ -112,4 +124,4 @@ function clearCompanyCache() {
   companyByUser.clear();
 }
 
-module.exports = { authenticateUser, assertCompanyAccess, callerCompanyId, callerSession, ScopeError, clearCompanyCache, registrationOrigin, bearerToken };
+module.exports = { authenticateUser, assertCompanyAccess, callerCompanyId, callerSession, callerMembership, ScopeError, clearCompanyCache, registrationOrigin, bearerToken };

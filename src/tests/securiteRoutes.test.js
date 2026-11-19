@@ -22,16 +22,20 @@ const GIG_A = '6a0000000000000000000a01';
 const GIG_B = '6a0000000000000000000b02';
 const LEAD_A = '6b0000000000000000000a01';
 const LEAD_B = '6b0000000000000000000b02';
+const LEAD_A_TAKEN = '6b0000000000000000000a03';
+const LEAD_MISMATCH = '6b0000000000000000000a04';
 const CALL_B = '6c0000000000000000000b02';
+const CALL_A = '6c0000000000000000000a01';
+const CALL_REP = '6c0000000000000000000a02';
 const U_REP = '6d00000000000000000000e1';
 const AGENT_REP = '6e00000000000000000000e1';
 const token = (userId) => jwt.sign({ userId }, 'test-secret');
-const members = { 'u-a': { companyId: A }, 'u-b': { companyId: B } };
+const members = { 'u-a': { companyId: A }, 'u-b': { companyId: B }, 'u-ag': { companyId: A, isAgent: true }, 'u-agb': { companyId: B, isAgent: true }, 'u-multi': { companyId: B, isAgent: false, isOwner: true, permissions: { 'calls.listen': true }, employments: [{ companyId: A, status: 'active' }, { companyId: 'ccccccccccccccccccccccc3', status: 'revoked' }] }, 'u-nostatus': { companyId: B, isAgent: true, employments: [{ companyId: A }] } };
 
 const db = {
   gigs: { [GIG_A]: { _id: GIG_A, companyId: A }, [GIG_B]: { _id: GIG_B, companyId: B } },
-  leads: { [LEAD_A]: { _id: LEAD_A, companyId: A, gigId: GIG_A }, [LEAD_B]: { _id: LEAD_B, gigId: GIG_B } },
-  calls: { [CALL_B]: { _id: CALL_B, companyId: B } },
+  leads: { [LEAD_A]: { _id: LEAD_A, companyId: A, gigId: GIG_A }, [LEAD_B]: { _id: LEAD_B, gigId: GIG_B }, [LEAD_A_TAKEN]: { _id: LEAD_A_TAKEN, companyId: A, gigId: GIG_A, assignedRepId: '6e00000000000000000000ff' }, [LEAD_MISMATCH]: { _id: LEAD_MISMATCH, companyId: B, gigId: GIG_A } },
+  calls: { [CALL_B]: { _id: CALL_B, companyId: B }, [CALL_A]: { _id: CALL_A, companyId: A }, [CALL_REP]: { _id: CALL_REP, companyId: A, agent: AGENT_REP } },
 };
 const fakeDb = (m) => Object.defineProperty(m.connection, 'db', {
   configurable: true,
@@ -172,10 +176,16 @@ describe('écritures de prospects avec un jeton', () => {
     expect(r.body.body.companyId).toBeUndefined();
     expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-a'), body: { gigId: GIG_B } })).status).toBe(403);
   });
-  test('modification par un rep : disposition et suivi seulement', async () => {
-    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { repDisposition: 'callback', nextFollowUpAt: '2026-12-01' } })).status).toBe(200);
-    const r = await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { Phone: '+33600000000' } });
-    expect(r.status).toBe(403);
+  test('modification par un rep : la date de rappel seulement ; la qualification passe par /disposition', async () => {
+    const ok = await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body: { nextFollowUpAt: '2026-12-01T17:00:00Z', nextFollowUpType: 'callback', nextFollowUpSource: 'rep' } });
+    expect(ok.status).toBe(200);
+    expect(Object.keys(ok.body.body).sort()).toEqual(['nextFollowUpAt', 'nextFollowUpSource', 'nextFollowUpType']);
+    for (const body of [{ repDisposition: 'argued_done' }, { pendingDisposition: 'argued_done' }, { Stage: 'Won' }, { followUpCalls: [{ rewardAmount: 100, repId: 'x' }] }, { Phone: '+33600000000' }, { nextFollowUpAt: '2026-12-01T17:00:00Z', repDisposition: 'argued_done' }]) {
+      expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body })).status).toBe(403);
+    }
+    for (const body of [{ nextFollowUpAt: 'demain' }, { nextFollowUpAt: '2099-01-01T00:00:00Z' }, { nextFollowUpType: 'transaction' }, { nextFollowUpSource: 'ai' }, { nextFollowUpAt: { $gt: '' } }, {}]) {
+      expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(U_REP), body })).status).toBe(400);
+    }
   });
   test('disposition et cockpit : agentId pris dans le jeton', async () => {
     const r = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(U_REP), body: { agentId: 'autre', disposition: 'x' } });
@@ -236,5 +246,134 @@ describe('configuration et identifiants Google', () => {
     const fs = require('fs'); const path = require('path');
     expect(fs.existsSync(path.join(__dirname, '../config/vertexServiceAccount.json'))).toBe(false);
     expect(fs.existsSync(path.join(__dirname, '../config/speechToTextServiceAccount.json'))).toBe(false);
+  });
+});
+
+describe('agent CLOUD (agent / opérateur du centre, isAgent dans /me) : liste et qualifie, ne gère pas', () => {
+  const AG = 'u-ag';
+  test('liste des prospects du gig : agentId imposé depuis le jeton (userId), jamais celui du client', async () => {
+    const r = await call('GET', `/api/leads/gig/${GIG_A}?agentId=${AGENT_REP}&page=1`, { auth: token(AG) });
+    expect(r.status).toBe(200);
+    expect(r.body.query).toMatchObject({ agentId: AG, page: '1' });
+    const s2 = await call('GET', `/api/leads/gig/${GIG_A}/search?search=x&agentId=forge`, { auth: token(AG) });
+    expect(s2.body.query.agentId).toBe(AG);
+  });
+  test('gestionnaire : liste de l\'entreprise (agentId retiré) ; rep : son profil rep', async () => {
+    expect((await call('GET', `/api/leads/gig/${GIG_A}?agentId=forge`, { auth: token('u-a') })).body.query.agentId).toBeUndefined();
+    expect((await call('GET', `/api/leads/gig/${GIG_A}?agentId=forge`, { auth: token(U_REP) })).body.query.agentId).toBe(AGENT_REP);
+  });
+  test('gig d\'une autre entreprise : 403', async () => {
+    expect((await call('GET', `/api/leads/gig/${GIG_B}`, { auth: token(AG) })).status).toBe(403);
+  });
+  test('qualification : 200, agentId = userId du jeton ; un membre non agent sans profil rep reste refusé', async () => {
+    const r = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(AG), body: { agentId: AGENT_REP, disposition: 'called_callback' } });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ handler: 'setDisposition', body: { agentId: AG, disposition: 'called_callback' } });
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-a'), body: { disposition: 'to_call' } })).status).toBe(403);
+    expect((await call('POST', `/api/leads/${LEAD_A}/cockpit-claim`, { auth: token(AG), body: {} })).body.body.agentId).toBe(AG);
+  });
+  test('actions de gestion refusées : confirmer un statut, supprimer, archiver, créer, champs hors disposition', async () => {
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition/confirm`, { auth: token(AG), body: { approve: true } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition/confirm`, { auth: token('u-a'), body: { approve: true } })).status).toBe(200);
+    expect((await call('DELETE', `/api/leads/${LEAD_A}`, { auth: token(AG) })).status).toBe(403);
+    expect((await call('POST', `/api/leads/${LEAD_A}/archive`, { auth: token(AG) })).status).toBe(403);
+    expect((await call('POST', '/api/leads', { auth: token(AG), body: { gigId: GIG_A, Deal_Name: 'x' } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { Deal_Name: 'x' } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { repDisposition: 'argued_done' } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token(AG), body: { nextFollowUpAt: '2026-12-01T17:00:00Z' } })).status).toBe(200);
+  });
+  test('multi-centres : un emploi actif ne donne qu\'un accès agent à l\'autre centre', async () => {
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-multi'), body: { disposition: 'to_call' } })).status).toBe(200);
+    expect((await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token('u-multi') })).body.query.agentId).toBe('u-multi');
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-multi'), body: { nextFollowUpAt: '2026-12-01T17:00:00Z' } })).status).toBe(200);
+    // pas d'accès membre : statistiques, couverture, compteurs, fichiers, gestion
+    expect((await call('GET', `/api/leads/company/${A}/stats`, { auth: token('u-multi') })).status).toBe(403);
+    expect((await call('GET', `/api/leads/company/${A}/has-leads`, { auth: token('u-multi') })).status).toBe(403);
+    expect((await call('GET', `/api/file-processing/mapping/${GIG_A}`, { auth: token('u-multi') })).status).toBe(403);
+    expect((await call('POST', '/api/leads', { auth: token('u-multi'), body: { gigId: GIG_A } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition/confirm`, { auth: token('u-multi'), body: { approve: true } })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token('u-agb'), body: { disposition: 'to_call' } })).status).toBe(403);
+  });
+  test('emploi sans statut : non actif', async () => {
+    expect((await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token('u-nostatus') })).status).toBe(403);
+  });
+  test('routes de gestion refusées à l\'agent : listes globales, statistiques, couverture, compteurs, note qualité', async () => {
+    for (const [method, path, body] of [['GET', '/api/leads'], ['GET', '/api/leads/filter?pipeline=p&stage=s'], ['GET', `/api/leads/company/${A}/stats`], ['GET', `/api/leads/company/${A}/rep-coverage`], ['GET', `/api/leads/company/${A}/has-leads`], ['PUT', `/api/calls/${CALL_B}/quality-score`, {}]]) {
+      expect((await call(method, path, { auth: token(AG), body })).status).toBe(403);
+    }
+    expect((await call('GET', `/api/leads/company/${A}/stats`, { auth: token('u-a') })).status).toBe(200);
+  });
+  test('fiche prospect : seulement ceux de sa liste (pas un prospect affecté à un autre)', async () => {
+    expect((await call('GET', `/api/leads/${LEAD_A}`, { auth: token(AG) })).status).toBe(200);
+    expect((await call('GET', `/api/leads/${LEAD_A_TAKEN}`, { auth: token(AG) })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_A_TAKEN}/disposition`, { auth: token(AG), body: { disposition: 'to_call' } })).status).toBe(403);
+    expect((await call('GET', `/api/leads/${LEAD_A_TAKEN}`, { auth: token('u-a') })).status).toBe(200);
+  });
+  test('entreprise du prospect = entreprise du gig = entreprise de l\'appelant', async () => {
+    expect((await call('GET', `/api/leads/${LEAD_MISMATCH}`, { auth: token('u-a') })).status).toBe(403);
+    expect((await call('GET', `/api/leads/${LEAD_MISMATCH}`, { auth: token('u-b') })).status).toBe(403);
+    expect((await call('PUT', `/api/leads/${LEAD_MISMATCH}/disposition`, { auth: token(AG), body: { disposition: 'to_call' } })).status).toBe(403);
+  });
+  test('même identifiant d\'acteur pour la liste et la qualification (profil rep d\'abord)', async () => {
+    const list = await call('GET', `/api/leads/gig/${GIG_A}`, { auth: token(AG) });
+    const disp = await call('PUT', `/api/leads/${LEAD_A}/disposition`, { auth: token(AG), body: { disposition: 'to_call' } });
+    expect(list.body.query.agentId).toBe(disp.body.body.agentId);
+  });
+});
+
+describe('appels et prospects : corps de requête et lectures de gestion (3e relecture)', () => {
+  test('PUT /calls/:id : agent CLOUD refusé ; rep seulement validByReps', async () => {
+    expect((await call('PUT', `/api/calls/${CALL_A}`, { auth: token('u-ag'), body: { 'transaction.validByCompany': true } })).status).toBe(403);
+    const ok = await call('PUT', `/api/calls/${CALL_REP}`, { auth: token(U_REP), body: { 'transaction.validByReps': true } });
+    expect(ok.status).toBe(200);
+    expect(ok.body.body).toEqual({ transaction: { validByReps: true } });
+    for (const body of [{ 'transaction.validByCompany': true }, { transaction: { validByReps: true, validByCompany: true } }, { status: 'completed' }, { recording_url: 'x' }]) {
+      expect((await call('PUT', `/api/calls/${CALL_REP}`, { auth: token(U_REP), body })).status).toBe(403);
+    }
+  });
+  test('PUT /calls/:id : clés $… ou pointées refusées (400), companyId jamais modifiable', async () => {
+    for (const body of [{ $set: { companyId: B } }, { $unset: { agent: 1 } }, { 'agent.x': 1 }, { notes: { $gt: '' } }, { transaction: { 'a.b': 1 } }, { transaction: { validByReps: 'oui' } }]) {
+      expect((await call('PUT', `/api/calls/${CALL_A}`, { auth: token('u-a'), body })).status).toBe(400);
+    }
+    const r = await call('PUT', `/api/calls/${CALL_A}`, { auth: token('u-a'), body: { companyId: B, agent: 'x', recording_url: 'y', 'transaction.validByCompany': true } });
+    expect(r.status).toBe(200);
+    expect(r.body.body).toEqual({ agent: 'x', recording_url: 'y', transaction: { validByCompany: true } });
+  });
+  test('PUT /calls/:id sans jeton (compatibilité) : ni companyId, ni agent, ni enregistrement, ni validation entreprise', async () => {
+    const r = await call('PUT', `/api/calls/${CALL_A}`, { body: { companyId: B, agent: 'x', recording_url: 'y', 'transaction.validByCompany': true, notes: 'n' } });
+    expect(r.status).toBe(200);
+    expect(r.body.body).toEqual({ notes: 'n' });
+  });
+  test('POST /calls : companyId imposé par la session, refus si différent', async () => {
+    const r = await call('POST', '/api/calls', { auth: token('u-a'), body: { to: '+33600000000' } });
+    expect(r.body.body.companyId).toBe(A);
+    expect((await call('POST', '/api/calls', { auth: token('u-a'), body: { companyId: B } })).status).toBe(403);
+    expect((await call('POST', '/api/calls', { auth: token('u-a'), body: { $where: '1' } })).status).toBe(400);
+  });
+  test('PUT /leads/:id par un membre : clés $… ou pointées refusées (400)', async () => {
+    for (const body of [{ $set: { companyId: B } }, { $unset: { gigId: 1 } }, { $rename: { companyId: 'x' } }, { 'customFields.a': 'b' }, { Address: { $set: 'x' } }]) {
+      expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-a'), body })).status).toBe(400);
+    }
+    expect((await call('PUT', `/api/leads/${LEAD_A}`, { auth: token('u-a'), body: { First_Name: 'ok' } })).status).toBe(200);
+  });
+  test('GET /calls par un agent CLOUD : ses propres appels seulement (agentId imposé)', async () => {
+    for (const q of ['', `?companyId=${A}`, '?userId=u-a', '?agentId=forge']) {
+      const r = await call('GET', `/api/calls${q}`, { auth: token('u-ag') });
+      expect(r.status).toBe(200);
+      expect(r.body.query.agentId).toBe('u-ag');
+      expect(r.body.query.companyId).toBeUndefined();
+      expect(r.body.query.userId).toBeUndefined();
+    }
+    expect((await call('GET', '/api/calls', { auth: token('u-a') })).body.query.companyId).toBe(A);
+  });
+});
+
+describe('appel : rattachement non modifiable (4e relecture)', () => {
+  test('lead, gigId, userId retirés (gestionnaire et anonyme) : un appel ne peut pas viser le prospect d\'une autre entreprise', async () => {
+    const r = await call('PUT', `/api/calls/${CALL_A}`, { auth: token('u-a'), body: { lead: LEAD_B, gigId: GIG_B, userId: 'u-b', 'transaction.validByCompany': true } });
+    expect(r.status).toBe(200);
+    expect(r.body.body).toEqual({ transaction: { validByCompany: true } });
+    const anon = await call('PUT', `/api/calls/${CALL_A}`, { body: { lead: LEAD_B, gigId: GIG_B, userId: 'u-b', notes: 'n' } });
+    expect(anon.body.body).toEqual({ notes: 'n' });
   });
 });

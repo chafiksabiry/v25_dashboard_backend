@@ -167,3 +167,52 @@ describe('/api/analytics et /api/dashboard', () => {
     for (const [q] of mockAgent.find.mock.calls) expect(q).toEqual({ _id: { $in: [] } });
   });
 });
+
+describe('écoute : entreprise principale seulement (agent multi-centres)', () => {
+  test('un appel d’une entreprise atteinte par companyIds / emploi n’expose jamais son enregistrement', async () => {
+    const { applyRecordingAccess } = require('../utils/recordingAccess');
+    const req = { auth: { userId: 'multi' }, canListenRecordings: true, listenCompanyId: OTHER };
+    const [own, other, unknown] = await applyRecordingAccess(req, [callDoc({ companyId: OTHER }), callDoc({ companyId: COMPANY }), callDoc({ companyId: null })]);
+    expect(own.recording_url).toBe(TWILIO);
+    expect(other.recording_url).toBeNull();
+    expect(other.recording_url_cloudinary).toBeNull();
+    expect(unknown.recording_url).toBeNull();
+  });
+  test('appel sans entreprise : URL seulement pour l’appelant qui l’a passé (rep indépendant)', async () => {
+    const { applyRecordingAccess } = require('../utils/recordingAccess');
+    const own = { auth: { userId: 'rep1' }, canListenRecordings: true, listenCompanyId: null, recordingAgentId: 'agent-rep1' };
+    expect((await applyRecordingAccess(own, callDoc({ companyId: null, agent: { _id: 'agent-rep1' } }))).recording_url).toBe(TWILIO);
+    expect((await applyRecordingAccess(own, callDoc({ companyId: null, userId: 'rep1' }))).recording_url).toBe(TWILIO);
+    expect((await applyRecordingAccess(own, callDoc({ companyId: null, agent: 'agent-autre' }))).recording_url).toBeNull();
+    expect((await applyRecordingAccess(own, callDoc({ companyId: COMPANY }))).recording_url).toBeNull();
+  });
+  test('/api/calls d’une entreprise atteinte par un emploi : refusée (accès membre réservé à l’entreprise principale)', async () => {
+    SESSIONS.multi = { isOwner: true, companyId: OTHER, permissions: { 'calls.listen': true }, employments: [{ companyId: COMPANY, status: 'active' }] };
+    expect((await get(`/api/calls?companyId=${COMPANY}`, token('multi'))).status).toBe(403);
+    expect((await get(`/api/calls/${CALL_ID}`, token('multi'))).status).toBe(403);
+  });
+});
+
+describe('analytics et dashboard : refusés à un agent CLOUD', () => {
+  test('agent : 403 ; titulaire : 200', async () => {
+    for (const path of ['/api/analytics/calls', '/api/analytics/overview', '/api/dashboard/live-calls', '/api/dashboard/stats']) {
+      expect((await get(path, token('agent-flagged-owner'))).status).toBe(403);
+    }
+    expect((await get('/api/analytics/calls', token('owner'))).status).not.toBe(403);
+  });
+});
+
+describe('GET /api/calls par un agent CLOUD sans profil rep', () => {
+  test('ses appels du poste (handledBy.userId) ou de rep (agent), jamais toute l’entreprise', async () => {
+    const AGENT_USER = '6f00000000000000000000a1';
+    SESSIONS[AGENT_USER] = { isAgent: true, companyId: COMPANY, permissions: {} };
+    const r = await get(`/api/calls?companyId=${COMPANY}`, token(AGENT_USER));
+    expect(r.status).toBe(200);
+    const q = mockCall.find.mock.calls.at(-1)[0];
+    expect(q.companyId).toBeUndefined();
+    expect(q.agent).toBeUndefined();
+    expect(q.$or.map((c) => Object.keys(c)[0])).toEqual(['agent', 'handledBy.userId']);
+    expect(String(q.$or[0].agent)).toBe(AGENT_USER);
+    expect(String(q.$or[1]['handledBy.userId'])).toBe(AGENT_USER);
+  });
+});

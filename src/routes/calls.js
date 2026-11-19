@@ -23,14 +23,14 @@ router.route('/gigs')
 
 router.route('/')
   .get(access.guardCallsQuery, getCalls)
-  .post(createCall);
+  .post(access.pinCallCompany, createCall);
 
 router.route('/initiate')
   .post(initiateCall);
 
 router.route('/:id')
   .get(access.guardCallParam('id'), getCall)
-  .put(access.guardCallParam('id'), updateCall);
+  .put(access.membersOnly, access.guardCallParam('id'), access.guardCallUpdate, updateCall);
 
 router.route('/:id/end')
   .post(access.guardCallParam('id'), endCall);
@@ -39,6 +39,6 @@ router.route('/:id/notes')
   .post(access.guardCallParam('id'), addNote);
 
 router.route('/:id/quality-score')
-  .put(access.guardCallParam('id'), updateQualityScore);
+  .put(access.membersOnly, access.guardCallParam('id'), updateQualityScore);
 
 module.exports = router;
