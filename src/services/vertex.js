@@ -1,13 +1,13 @@
-const { OAuth2Client, GoogleAuth } = require('google-auth-library');
+const { OAuth2Client } = require('google-auth-library');
 const http = require('http');
 const axios = require('axios');
-const path = require("path");
 const { Storage } = require('@google-cloud/storage');
 const { VertexAI } = require('@google-cloud/vertexai');
 const { generateCallScoringPrompt } = require('../prompts/call-scoring-prompt');
 const { generateCallPostActionsPrompt } = require('../prompts/call-action-plan');
 const { generateAudioSummaryPrompt } = require('../prompts/call-summary-prompt');
 const { parseCleanJson } = require('../parsers/parse-call-scoring-result');
+const { VERTEX_VARS, googleAuthOptions, isCredentialsError } = require('./gcpCredentials');
 
 
 // Retreive OAUTH2.0 credentials and Google Cloud variables form .env
@@ -35,36 +35,43 @@ if (missingVars.length > 0) {
     console.warn('Using default project ID:', project);
 }
 
-// Construct the absolute path to the service account JSON file
-const keyPath = path.join(__dirname, "../config/vertexServiceAccount.json");
-
-// Vérifier si le fichier de service account existe
-const fs = require('fs');
-if (!fs.existsSync(keyPath)) {
-    console.warn('Warning: Service account file not found at:', keyPath);
-    console.warn('Make sure to place your service account JSON file at this location');
+// Identifiants : VERTEX_AI_CREDENTIALS (JSON complet du compte de service, voir gcpCredentials.js), sinon
+// GOOGLE_APPLICATION_CREDENTIALS (fichier hors dépôt). Aucun fichier de clé dans le dépôt.
+// Client créé au premier appel : sans identifiants, le serveur démarre et les routes Vertex répondent 503 (message clair).
+function vertexClientOptions(env = process.env, logger = console) {
+    const auth = googleAuthOptions(VERTEX_VARS, 'Vertex AI', env, logger);
+    return {
+        ...(auth.configError ? { configError: auth.configError } : {}),
+        options: {
+            project: env.QAUTH2_PROJECT_ID || auth.projectId || project,
+            location: location,
+            googleAuthOptions: {
+                ...(auth.credentials ? { credentials: auth.credentials } : {}),
+                scopes: ['https://www.googleapis.com/auth/cloud-platform']
+            }
+        }
+    };
 }
 
-// Authenticate to Google cloud using the vertex service account
-const auth = new GoogleAuth({
-    keyFilename: keyPath,
-    scopes: ['https://www.googleapis.com/auth/cloud-platform']
-});
-
-// Create an instance of VertexAI class with explicit project configuration
-const vertex_ai = new VertexAI({ 
-    project: project, 
-    location: location, 
-    googleAuthOptions: {
-        keyFilename: keyPath,
-        scopes: ['https://www.googleapis.com/auth/cloud-platform']
+let cachedModel = null;
+function getModel() {
+    if (!cachedModel) {
+        const { options, configError } = vertexClientOptions();
+        if (configError) throw configError;
+        cachedModel = new VertexAI(options).getGenerativeModel({ model: 'gemini-1.5-flash-002' });
     }
-});
+    return cachedModel;
+}
 
-// Create an instance of GenerativeModel class
-const generativeVisionModel = vertex_ai.getGenerativeModel({
-    model: 'gemini-1.5-flash-002',
-});
+// Avertissement au démarrage si les identifiants manquent (sans exception ; la valeur n'est jamais journalisée).
+if (process.env.NODE_ENV !== 'test') googleAuthOptions(VERTEX_VARS, 'Vertex AI');
+
+// Compatibilité avec le code existant : `generativeVisionModel.generateContent(...)`.
+const generativeVisionModel = {
+    generateContent: (request) => getModel().generateContent(request),
+    generateContentStream: (request) => getModel().generateContentStream(request),
+};
+exports.vertexClientOptions = vertexClientOptions;
 
 // Get the summary of an audio 
 exports.getAudioSummary = async (file_uri) => {
@@ -94,6 +101,7 @@ exports.getAudioSummary = async (file_uri) => {
         return parseCleanJson(aggregatedResponse.candidates[0].content.parts[0].text);
 
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
     }
@@ -124,6 +132,7 @@ exports.getAudioTranscription = async (file_uri) => {
         const aggregatedResponse = result.response;
         return { transcription: aggregatedResponse.candidates[0].content.parts[0].text };
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
     }
@@ -153,6 +162,7 @@ exports.getCallScoring = async (file_uri) => {
         return parseCleanJson(response.candidates[0].content.parts[0].text);
         //return response;
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error analyzing the audio:", error);
         throw new Error("Audio analyzis failed");
     }
@@ -182,6 +192,7 @@ exports.getCallPostActions = async (file_uri) => {
         return parseCleanJson(response.candidates[0].content.parts[0].text);
         //return response;
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Service : Error during generating follow-up actions:", error);
         throw new Error("Audio analyzis failed");
     }
