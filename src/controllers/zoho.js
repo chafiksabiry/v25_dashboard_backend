@@ -7,9 +7,12 @@ const {
   mappingIsUsable,
   normalizeModule,
   fieldsQuery,
+  scalarValue,
   applyZohoRecord,
   toZohoPayload,
   zohoApiRoot,
+  zohoHostCandidates,
+  isZohoWrongUrl,
 } = require("../services/zohoFieldMapping");
 const mongoose = require("mongoose");
 
@@ -1952,6 +1955,179 @@ const listZohoFields = async (req, res) => {
   }
 };
 
+const PREFERRED_ZOHO_COLUMNS = [
+  'Deal_Name',
+  'Full_Name',
+  'First_Name',
+  'Last_Name',
+  'Email',
+  'Email_1',
+  'Secondary_Email',
+  'Phone',
+  'Mobile',
+  'Mailing_Street',
+  'Street',
+  'Address',
+  'Mailing_Zip',
+  'Zip_Code',
+  'Postal_Code',
+  'Mailing_City',
+  'City',
+  'Date_of_Birth',
+];
+
+const FALLBACK_ZOHO_FIELDS = {
+  Deals: ['Deal_Name', 'Stage', 'Pipeline', 'Amount', 'Closing_Date', 'Description'],
+  Leads: ['Last_Name', 'First_Name', 'Full_Name', 'Email', 'Phone', 'Mobile', 'Company', 'Street', 'City', 'Zip_Code', 'Country', 'Lead_Status'],
+  Contacts: ['Last_Name', 'First_Name', 'Full_Name', 'Email', 'Phone', 'Mobile', 'Mailing_Street', 'Mailing_City', 'Mailing_Zip', 'Mailing_Country'],
+};
+
+function orderZohoFieldNames(names) {
+  return [...names].sort((a, b) => {
+    const ai = PREFERRED_ZOHO_COLUMNS.indexOf(a);
+    const bi = PREFERRED_ZOHO_COLUMNS.indexOf(b);
+    if (ai === -1 && bi === -1) return 0;
+    if (ai === -1) return 1;
+    if (bi === -1) return -1;
+    return ai - bi;
+  }).slice(0, 50);
+}
+
+/** Zoho Get Records returns INVALID_URL_PATTERN when `fields` is missing or the data center is wrong. */
+async function resolveZohoApiHost(accessToken, moduleName, preferredHost) {
+  const probeField = moduleName === 'Deals' ? 'Deal_Name' : 'Last_Name';
+  let lastData = null;
+  for (const host of zohoHostCandidates(preferredHost)) {
+    try {
+      const response = await axios.get(`${host}/crm/v2/${moduleName}`, {
+        params: { fields: probeField, page: 1, per_page: 1 },
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+        timeout: 20000,
+        validateStatus: () => true,
+      });
+      if (response.status === 200 || response.status === 204) return host;
+      if (!isZohoWrongUrl(response.data)) {
+        if (response.status === 401 && response.data?.code === 'INVALID_TOKEN') {
+          lastData = response.data;
+          continue;
+        }
+        return host;
+      }
+      lastData = response.data;
+    } catch (error) {
+      lastData = error.response?.data || { message: error.message };
+    }
+  }
+  const error = new Error(lastData?.message || 'Please check if the URL trying to access is a correct one');
+  error.zohoData = lastData;
+  throw error;
+}
+
+async function loadZohoFieldNames(host, accessToken, moduleName) {
+  try {
+    const fieldsResponse = await axios.get(`${host}/crm/v2/settings/fields`, {
+      params: { module: moduleName },
+      headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+      timeout: 30000,
+      validateStatus: () => true,
+    });
+    const names = (fieldsResponse.data?.fields || [])
+      .map((field) => field?.api_name)
+      .filter((name) => name && name !== 'id' && !String(name).startsWith('$'));
+    if (fieldsResponse.status === 200 && names.length) return orderZohoFieldNames(names);
+  } catch (fieldsError) {
+    console.warn('Zoho field catalog unavailable:', fieldsError.message);
+  }
+  return FALLBACK_ZOHO_FIELDS[moduleName] || FALLBACK_ZOHO_FIELDS.Leads;
+}
+
+/** Raw CRM rows for the same column-mapping import used by a file upload. */
+const exportZohoTable = async (req, res) => {
+  res.setTimeout(120000);
+  const moduleName = normalizeModule(req.query.module || req.zohoConfig?.crmModule);
+  const accessToken = req.zohoAccessToken;
+  const preferredHost = req.zohoConfig?.api_domain || zohoApiRoot();
+
+  try {
+    const host = await resolveZohoApiHost(accessToken, moduleName, preferredHost);
+    if (req.zohoConfig?._id && host !== req.zohoConfig.api_domain) {
+      await ZohoConfig.updateOne({ _id: req.zohoConfig._id }, { $set: { api_domain: host } });
+      req.zohoConfig.api_domain = host;
+    }
+
+    const fieldNames = await loadZohoFieldNames(host, accessToken, moduleName);
+    const rows = [];
+    let page = 1;
+    let more = true;
+    const maxRows = 5000;
+
+    let pageToken = '';
+    while (more && rows.length < maxRows && page <= 50) {
+      const params = {
+        fields: fieldNames.join(','),
+        per_page: 200,
+      };
+      if (moduleName === 'Leads') params.converted = 'both';
+      if (pageToken) params.page_token = pageToken;
+      else params.page = page;
+
+      const response = await axios.get(`${host}/crm/v2/${moduleName}`, {
+        params,
+        headers: { Authorization: `Zoho-oauthtoken ${accessToken}` },
+        timeout: 30000,
+        validateStatus: (status) => status === 200 || status === 204,
+      });
+
+      if (response.status !== 200 && response.status !== 204 && isZohoWrongUrl(response.data)) {
+        const error = new Error(response.data?.message || 'Please check if the URL trying to access is a correct one');
+        error.response = response;
+        throw error;
+      }
+
+      const records = Array.isArray(response.data?.data) ? response.data.data : [];
+      if (!records.length) break;
+
+      for (const record of records) {
+        const row = {};
+        for (const key of fieldNames) {
+          row[key] = scalarValue(record[key]);
+        }
+        rows.push(row);
+        if (rows.length >= maxRows) break;
+      }
+
+      const info = response.data?.info || {};
+      pageToken = info.next_page_token || '';
+      more = Boolean(info.more_records);
+      page += 1;
+    }
+
+    return res.json({
+      success: true,
+      data: {
+        module: moduleName,
+        headers: fieldNames,
+        rows,
+        total: rows.length,
+        truncated: more && rows.length >= maxRows,
+        apiDomain: host,
+      },
+    });
+  } catch (error) {
+    const zohoError = error.response?.data || error.zohoData;
+    console.error('Zoho records export failed:', {
+      module: moduleName,
+      preferredHost,
+      code: zohoError?.code,
+      message: zohoError?.message || error.message,
+    });
+    return res.status(error.response?.status === 401 ? 401 : 502).json({
+      success: false,
+      message: zohoError?.message || error.message || 'Impossible de lire les enregistrements Zoho',
+    });
+  }
+};
+
 const saveZohoFieldMapping = async (req, res) => {
   const mapping = normalizeMapping(req.body?.mapping);
   if (!mappingIsUsable(mapping)) {
@@ -2015,6 +2191,7 @@ module.exports = {
   getSalesIQPortalName,
   syncAllLeads,
   listZohoFields,
+  exportZohoTable,
   saveZohoFieldMapping,
   getZohoConfigById,
   getAllZohoConfigs

@@ -18,7 +18,7 @@ function buildCompanyLeadFilter(companyId, gigId) {
 const COCKPIT_LOCK_MS = 5 * 60 * 1000;
 
 const LEAD_LIST_SELECT =
-  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy pendingDisposition pendingDispositionAt pendingDispositionBy assignedRepId assignedRepAt nextFollowUpAt nextFollowUpType nextFollowUpSource nextFollowUpNotifiedAt';
+  '_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Telephony Pipeline Stage refreshToken updatedAt Created_Time gigId userId customFields cockpitLockedBy cockpitLockedAt cockpitLockExpiresAt signedByAgent signedAt assignedTo repDisposition repDispositionAt repDispositionBy pendingDisposition pendingDispositionAt pendingDispositionBy assignedRepId assignedRepAt nextFollowUpAt nextFollowUpType nextFollowUpSource nextFollowUpNotifiedAt';
 
 const VALID_DISPOSITIONS = [
   'to_call', 'called_unreachable', 'called_voicemail', 'called_wrong_number',
@@ -573,10 +573,27 @@ exports.createLeadsBulk = async (req, res) => {
     const normalize = (value) =>
       typeof value === 'string' ? value.trim().toLowerCase() : '';
 
-    const isPlaceholderEmail = (email) =>
-      !email || email === 'no-email@placeholder.com';
-    const isPlaceholderPhone = (phone) =>
-      !phone || phone === 'no-phone@placeholder.com';
+    const isPlaceholderEmail = (email) => {
+      const value = normalize(email);
+      return !value || value === 'no-email@placeholder.com';
+    };
+    const isPlaceholderPhone = (phone) => {
+      const value = normalize(phone).replace(/^\+/, '');
+      return !value || value === 'no-phone@placeholder.com';
+    };
+    const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    const sanitizeLeadForInsert = (lead) => {
+      const next = { ...lead };
+      const email = typeof next.Email_1 === 'string' ? next.Email_1.trim() : '';
+      if (!email || !emailPattern.test(email)) {
+        next.Email_1 = 'no-email@placeholder.com';
+      }
+      if (next.Last_Activity_Time) {
+        const parsed = new Date(next.Last_Activity_Time);
+        next.Last_Activity_Time = Number.isNaN(parsed.getTime()) ? null : parsed;
+      }
+      return next;
+    };
 
     const seenEmails = new Set();
     const seenPhones = new Set();
@@ -628,7 +645,7 @@ exports.createLeadsBulk = async (req, res) => {
             { $or: valueFilters },
           ],
         })
-          .select('Email_1 Phone')
+          .select('Email_1 Phone customFields')
           .lean();
 
         existingEmails = new Set(
@@ -637,11 +654,26 @@ exports.createLeadsBulk = async (req, res) => {
         existingPhones = new Set(
           existing.map((l) => normalize(l.Phone)).filter((v) => v && !isPlaceholderPhone(v))
         );
+
+        var existingByEmail = new Map();
+        var existingByPhone = new Map();
+        for (const doc of existing) {
+          const emailKey = normalize(doc.Email_1);
+          const phoneKey = normalize(doc.Phone);
+          if (emailKey && !isPlaceholderEmail(emailKey) && !existingByEmail.has(emailKey)) {
+            existingByEmail.set(emailKey, doc);
+          }
+          if (phoneKey && !isPlaceholderPhone(phoneKey) && !existingByPhone.has(phoneKey)) {
+            existingByPhone.set(phoneKey, doc);
+          }
+        }
       }
     }
 
     let dbDuplicates = 0;
-    const leadsToCreate = dedupedInPayload.filter((lead) => {
+    const leadsToCreate = [];
+    const leadsToEnrich = [];
+    for (const lead of dedupedInPayload) {
       const email = normalize(lead.Email_1);
       const phone = normalize(lead.Phone);
       const duplicate =
@@ -649,10 +681,47 @@ exports.createLeadsBulk = async (req, res) => {
         (phone && !isPlaceholderPhone(phone) && existingPhones.has(phone));
       if (duplicate) {
         dbDuplicates += 1;
-        return false;
+        if (lead.customFields && Object.keys(lead.customFields).length) {
+          leadsToEnrich.push(lead);
+        }
+        continue;
       }
-      return true;
-    });
+      leadsToCreate.push(lead);
+    }
+
+    const plainCustomFields = (raw) => {
+      if (!raw || typeof raw !== 'object') return {};
+      if (raw instanceof Map) return Object.fromEntries(raw);
+      return { ...raw };
+    };
+
+    const enrichOps = [];
+    const enrichedIds = new Set();
+    for (const lead of leadsToEnrich) {
+      const email = normalize(lead.Email_1);
+      const phone = normalize(lead.Phone);
+      const doc =
+        (email && !isPlaceholderEmail(email) && existingByEmail?.get(email)) ||
+        (phone && !isPlaceholderPhone(phone) && existingByPhone?.get(phone));
+      if (!doc || enrichedIds.has(String(doc._id))) continue;
+      const merged = { ...plainCustomFields(doc.customFields), ...lead.customFields };
+      const previous = plainCustomFields(doc.customFields);
+      const changed = Object.entries(merged).some(([key, value]) => previous[key] !== value);
+      if (!changed) continue;
+      enrichedIds.add(String(doc._id));
+      enrichOps.push({
+        updateOne: {
+          filter: { _id: doc._id },
+          update: { $set: { customFields: merged } },
+        },
+      });
+    }
+
+    let updated = 0;
+    if (enrichOps.length) {
+      const writeResult = await Lead.bulkWrite(enrichOps, { ordered: false });
+      updated = writeResult.modifiedCount || enrichOps.length;
+    }
 
     const skipped = payloadDuplicates + dbDuplicates;
     console.log(
@@ -662,24 +731,46 @@ exports.createLeadsBulk = async (req, res) => {
     if (leadsToCreate.length === 0) {
       return res.status(200).json({
         success: true,
-        message: 'All provided leads were duplicates and were skipped',
+        message: updated
+          ? `${updated} contacts mis à jour avec les colonnes du fichier`
+          : 'All provided leads were duplicates and were skipped',
         count: 0,
+        updated,
         skipped,
         data: [],
       });
     }
 
-    const createdLeads = await Lead.insertMany(leadsToCreate, { ordered: false });
+    const createdLeads = [];
+    const chunkSize = 200;
+    for (let offset = 0; offset < leadsToCreate.length; offset += chunkSize) {
+      const chunk = leadsToCreate.slice(offset, offset + chunkSize).map(sanitizeLeadForInsert);
+      try {
+        const inserted = await Lead.insertMany(chunk, { ordered: false });
+        createdLeads.push(...inserted);
+      } catch (insertError) {
+        const partial = Array.isArray(insertError.insertedDocs) ? insertError.insertedDocs : [];
+        createdLeads.push(...partial);
+        console.error(
+          `❌ Bulk chunk ${offset}-${offset + chunk.length} saved ${partial.length}/${chunk.length}:`,
+          insertError.message
+        );
+        if (!partial.length && createdLeads.length === 0 && offset === 0) {
+          throw insertError;
+        }
+      }
+    }
 
-    console.log(`✅ Successfully created ${createdLeads.length} leads (skipped ${skipped} duplicates)`);
+    console.log(`✅ Successfully created ${createdLeads.length} leads (skipped ${skipped} duplicates, updated ${updated})`);
 
     res.status(skipped > 0 ? 207 : 201).json({
       success: true,
       message:
         skipped > 0
-          ? `${createdLeads.length} leads créés, ${skipped} doublons ignorés`
+          ? `${createdLeads.length} leads créés, ${updated} mis à jour, ${skipped} doublons ignorés`
           : `${createdLeads.length} leads créés`,
       count: createdLeads.length,
+      updated,
       skipped,
       data: createdLeads,
     });
@@ -1164,7 +1255,7 @@ exports.searchLeadsByGigId = async (req, res) => {
         select: 'name email',
         options: { lean: true }
       })
-      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt Created_Time repDisposition gigId userId')
+      .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt Created_Time repDisposition gigId userId customFields')
       .sort({ updatedAt: -1 })
       .limit(maxResults)
       .lean();
@@ -1742,19 +1833,43 @@ exports.getCompanyRepCoverage = async (req, res) => {
     const callMatch = {
       companyId: companyObjId,
       lead: { $ne: null },
-      userId: { $ne: null }
+      $or: [{ agent: { $ne: null } }, { userId: { $ne: null } }]
     };
     if (gigObjId) callMatch.gigId = gigObjId;
 
     const repAgg = await Call.aggregate([
       { $match: callMatch },
-      // Collapse multiple calls of the same (rep, lead) pair down to one
-      { $group: { _id: { userId: "$userId", lead: "$lead" } } },
-      { $group: { _id: "$_id.userId", current: { $sum: 1 } } },
+      {
+        $group: {
+          _id: {
+            rep: { $ifNull: ["$agent", "$userId"] },
+            lead: "$lead"
+          },
+          agentId: { $first: "$agent" },
+          userId: { $first: "$userId" }
+        }
+      },
+      {
+        $group: {
+          _id: "$_id.rep",
+          current: { $sum: 1 },
+          agentId: { $first: "$agentId" },
+          userId: { $first: "$userId" }
+        }
+      },
+      {
+        $lookup: {
+          from: "agents",
+          localField: "agentId",
+          foreignField: "_id",
+          as: "agent"
+        }
+      },
+      { $unwind: { path: "$agent", preserveNullAndEmptyArrays: true } },
       {
         $lookup: {
           from: "users",
-          localField: "_id",
+          localField: "userId",
           foreignField: "_id",
           as: "user"
         }
@@ -1763,9 +1878,35 @@ exports.getCompanyRepCoverage = async (req, res) => {
       {
         $project: {
           _id: 0,
-          userId: "$_id",
+          userId: { $ifNull: ["$userId", "$_id"] },
           current: 1,
-          name: { $ifNull: ["$user.name", "Rep"] }
+          name: {
+            $let: {
+              vars: {
+                agentName: {
+                  $trim: {
+                    input: { $ifNull: ["$agent.personalInfo.name", ""] }
+                  }
+                },
+                userName: {
+                  $trim: { input: { $ifNull: ["$user.name", ""] } }
+                }
+              },
+              in: {
+                $cond: [
+                  { $gt: [{ $strLenCP: "$$agentName" }, 0] },
+                  "$$agentName",
+                  {
+                    $cond: [
+                      { $gt: [{ $strLenCP: "$$userName" }, 0] },
+                      "$$userName",
+                      "Rep"
+                    ]
+                  }
+                ]
+              }
+            }
+          }
         }
       },
       { $sort: { current: -1 } },

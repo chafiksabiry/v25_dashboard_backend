@@ -25,6 +25,7 @@ const {
   archiveEmail,
   syncAllLeads,
   listZohoFields,
+  exportZohoTable,
   saveZohoFieldMapping,
   getZohoConfigById,
   getAllZohoConfigs
@@ -35,6 +36,28 @@ const { zohoTokenMiddleware, requireZohoConfig } = require('../middleware/zohoTo
 const access = require('../middleware/access');
 
 const router = express.Router();
+
+const COMPANY_APP_URL = (process.env.HARX_COMPANY_APP_URL || 'https://harx.ai/company').replace(/\/$/, '');
+const COMPANY_API_URL = (
+  process.env.COMPANY_API_URL ||
+  'https://v25searchcompanywizardbackend-production.up.railway.app/api'
+).replace(/\/$/, '');
+const REQUIRED_ONBOARDING_STEP_IDS = [1, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13];
+
+async function isOnboardingComplete(userId) {
+  try {
+    const response = await axios.get(
+      `${COMPANY_API_URL}/onboarding/companies/${encodeURIComponent(userId)}/onboardingProgress`,
+      { timeout: 8000, validateStatus: () => true }
+    );
+    if (response.status !== 200) return false;
+    const completed = new Set((response.data?.completedSteps || []).map(Number));
+    return REQUIRED_ONBOARDING_STEP_IDS.every((stepId) => completed.has(stepId));
+  } catch (error) {
+    console.error('Onboarding check failed:', error.message);
+    return false;
+  }
+}
 
 // Configuration et authentification
 // Contrôle d'accès : voir middleware/access.js. Les routes de données Zoho (zohoTokenMiddleware) lisent encore l'ancien en-tête
@@ -97,7 +120,7 @@ router.get('/callback', async (req, res) => {
 
 router.get('/auth/callback', async (req, res) => {
   try {
-    const { code, state, userId } = req.query;
+    const { code, state, userId, accountsServer, location } = req.query;
     
     // Check if code is present
     if (!code) {
@@ -115,20 +138,35 @@ router.get('/auth/callback', async (req, res) => {
       });
     }
 
-    const tokenData = await zohoService.getAccessToken(code);
+    const browserAccountsServer = accountsServer
+      || zohoService.accountsBaseFromLocation(location)
+      || '';
+    const tokenData = await zohoService.getAccessToken(code, null, browserAccountsServer);
 
-    await ZohoConfig.findOneAndUpdate(
-      { userId: finalUserId },
-      {
-        access_token: tokenData.access_token,
-        refresh_token: tokenData.refresh_token,
-        expires_in: tokenData.expires_in,
-        updated_at: new Date(),
-      },
-      { upsert: true }
-    );
+    const payload = {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in,
+      api_domain: tokenData.api_domain || '',
+      accounts_server: browserAccountsServer || '',
+    };
 
-    return res.redirect(`https://v25-preprod.harx.ai/app11?session=someGeneratedSessionId`);
+    const wantsJson = String(req.get('accept') || '').includes('application/json');
+    if (wantsJson) {
+      return res.json(payload);
+    }
+
+    const onboardingComplete = await isOnboardingComplete(finalUserId);
+    const hashPath = onboardingComplete ? '/dashboard/leads' : '/orchestrator?startStep=5';
+    const base = COMPANY_APP_URL.replace(/\/$/, '').replace(/#.*$/, '');
+    const params = new URLSearchParams({
+      zoho_access_token: payload.access_token,
+      zoho_refresh_token: payload.refresh_token || '',
+      zoho_expires_in: String(payload.expires_in || 3600),
+      zoho_api_domain: payload.api_domain,
+      zoho_accounts_server: payload.accounts_server,
+    });
+    return res.redirect(`${base}?${params.toString()}#${hashPath}`);
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
@@ -137,18 +175,29 @@ router.get('/auth/callback', async (req, res) => {
 
 router.post('/refresh-token', async (req, res) => {
   try {
-      const { refreshToken } = req.body;
+      const { refreshToken, accountsServer, apiDomain } = req.body;
       if (!refreshToken) {
           return res.status(400).json({ error: 'Refresh token is required' });
       }
 
-      const tokenData = await zohoService.refreshToken(refreshToken);
-      res.json({ 
+      const tokenData = await zohoService.refreshAccessToken({
+          refreshToken,
+          accountsServer,
+          apiDomain,
+          clientId: zohoService.config.clientId,
+          clientSecret: zohoService.config.clientSecret,
+          fallbackTokenUrl: zohoService.config.tokenUrl,
+      });
+      res.json({
           message: 'Token refreshed successfully',
-          accessToken: tokenData.access_token
+          access_token: tokenData.access_token,
+          refresh_token: tokenData.refresh_token || refreshToken,
+          expires_in: tokenData.expires_in,
+          api_domain: tokenData.api_domain || apiDomain || '',
+          accessToken: tokenData.access_token,
       });
   } catch (error) {
-      res.status(500).json({ error: error.message });
+      res.status(500).json({ error: error.zohoError || error.message });
   }
 });
 
@@ -158,6 +207,7 @@ router.post('/leads', zohoTokenMiddleware, requireZohoConfig, saveLeads);
 router.put('/leads/:id', zohoTokenMiddleware, requireZohoConfig, updateLead);
 router.post('/leads/sync-all', zohoTokenMiddleware, requireZohoConfig, syncAllLeads);
 router.get('/fields', zohoTokenMiddleware, requireZohoConfig, listZohoFields);
+router.get('/records/table', zohoTokenMiddleware, requireZohoConfig, exportZohoTable);
 router.put('/field-mapping', zohoTokenMiddleware, requireZohoConfig, saveZohoFieldMapping);
 router.get('/deals', zohoTokenMiddleware, requireZohoConfig, getDeals);
 router.get('/deals/count', zohoTokenMiddleware, requireZohoConfig, getDealsCount);
@@ -221,6 +271,7 @@ router.post('/config/user/:userId/refresh-token', access.compatAuth, access.guar
         access_token: tokenData.access_token,
         refresh_token: tokenData.refresh_token,
         expires_in: tokenData.expires_in,
+        ...(tokenData.api_domain ? { api_domain: tokenData.api_domain } : {}),
         updated_at: new Date(),
       }
     );
