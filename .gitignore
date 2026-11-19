@@ -1,2 +1,8 @@
 node_modules/
 .env
+
+# Clés Google Cloud : jamais dans le dépôt (identifiants dans les variables d'environnement JSON)
+src/config/*ServiceAccount*.json
+*ServiceAccount*.json
+*service-account*.json
+*-credentials.json

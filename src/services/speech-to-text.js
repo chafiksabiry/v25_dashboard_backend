@@ -1,11 +1,15 @@
 const speech = require('@google-cloud/speech');
-const path = require("path");
+const { SPEECH_VARS, googleAuthOptions, requireGoogleAuth, isCredentialsError } = require('./gcpCredentials');
 
-// Path to your JSON key file
-const keyFilePath = path.join(__dirname, "../config/speechToTextServiceAccount.json");
-
-// Create Google Speech client with authentication
-const client = new speech.SpeechClient({ keyFilename: keyFilePath });
+// Identifiants : GCP_SPEECH_TO_TEXT_CREDENTIALS (JSON complet du compte de service, voir gcpCredentials.js), sinon
+// GOOGLE_APPLICATION_CREDENTIALS (fichier hors dépôt). Aucun fichier de clé. Client créé au premier appel : sans identifiants,
+// le serveur démarre et l'appel échoue avec une erreur 503 claire nommant la variable.
+if (process.env.NODE_ENV !== 'test') googleAuthOptions(SPEECH_VARS, 'Speech-to-Text');
+let speechClient = null;
+const getClient = () => {
+    if (!speechClient) speechClient = new speech.SpeechClient(requireGoogleAuth(SPEECH_VARS, 'Speech-to-Text'));
+    return speechClient;
+};
 
 exports.transcribeLongAudio = async (languageCode, fileUri) => {
     try {
@@ -25,7 +29,7 @@ exports.transcribeLongAudio = async (languageCode, fileUri) => {
         console.log("Starting long audio transcription...");
 
         // Long-running operation for large audio files
-        const [operation] = await client.longRunningRecognize(request);
+        const [operation] = await getClient().longRunningRecognize(request);
 
         console.log("Waiting for transcription to complete...");
         const [response] = await operation.promise(); // Wait for the operation to complete
@@ -38,6 +42,7 @@ exports.transcribeLongAudio = async (languageCode, fileUri) => {
         console.log(`Transcription completed: \n${transcription}`);
         return transcription;
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error transcribing long audio:", error);
         throw new Error("Long audio transcription failed");
     }
