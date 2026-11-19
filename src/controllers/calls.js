@@ -216,6 +216,7 @@ exports.updateQualityScore = async (req, res) => {
   }
 }; */
 const { CallService } = require('../services/CallService');
+const { applyRecordingAccess } = require('../utils/recordingAccess');
 
 const callService = new CallService();
 
@@ -277,7 +278,7 @@ exports.getCalls = async (req, res) => {
     res.status(200).json({
       success: true,
       count: calls.length,
-      data: calls
+      data: await applyRecordingAccess(req, calls)
     });
   } catch (err) {
     console.error('Error in getCalls:', err);
@@ -307,7 +308,7 @@ exports.getCall = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({
@@ -333,7 +334,7 @@ exports.createCall = async (req, res) => {
 
     res.status(201).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({
@@ -432,7 +433,7 @@ exports.updateCall = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({
@@ -466,7 +467,7 @@ exports.endCall = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({
@@ -496,7 +497,7 @@ exports.addNote = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({
@@ -526,7 +527,7 @@ exports.updateQualityScore = async (req, res) => {
 
     res.status(200).json({
       success: true,
-      data: call
+      data: await applyRecordingAccess(req, call)
     });
   } catch (err) {
     res.status(400).json({
