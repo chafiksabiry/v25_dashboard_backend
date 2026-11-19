@@ -1,11 +1,13 @@
 const speech = require('@google-cloud/speech');
-const { SPEECH_VARS, googleAuthOptions } = require('./gcpCredentials');
+const { SPEECH_VARS, googleAuthOptions, requireGoogleAuth, isCredentialsError } = require('./gcpCredentials');
 
-// Identifiants : GCP_SPEECH_TO_TEXT_CREDENTIALS (JSON du compte de service, voir gcpCredentials.js), sinon ADC.
-// Aucun fichier de clé. Client créé au premier appel : sans identifiants, le service démarre et l'appel échoue clairement.
+// Identifiants : GCP_SPEECH_TO_TEXT_CREDENTIALS (JSON du compte de service, voir gcpCredentials.js), sinon
+// GOOGLE_APPLICATION_CREDENTIALS (fichier hors dépôt). Aucun fichier de clé. Client créé au premier appel : sans identifiants,
+// le service démarre et l'appel échoue avec une erreur 503 claire nommant la variable.
+if (process.env.NODE_ENV !== 'test') googleAuthOptions(SPEECH_VARS, 'Speech-to-Text');
 let speechClient = null;
 const getClient = () => {
-    if (!speechClient) speechClient = new speech.SpeechClient(googleAuthOptions(SPEECH_VARS, 'Speech-to-Text'));
+    if (!speechClient) speechClient = new speech.SpeechClient(requireGoogleAuth(SPEECH_VARS, 'Speech-to-Text'));
     return speechClient;
 };
 
@@ -40,6 +42,7 @@ exports.transcribeLongAudio = async (languageCode, fileUri) => {
         console.log(`Transcription completed: \n${transcription}`);
         return transcription;
     } catch (error) {
+        if (isCredentialsError(error)) throw error;
         console.error("Error transcribing long audio:", error);
         throw new Error("Long audio transcription failed");
     }

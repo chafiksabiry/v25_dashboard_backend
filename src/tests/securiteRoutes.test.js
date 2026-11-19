@@ -238,8 +238,9 @@ describe('configuration et identifiants Google', () => {
   });
   test('sans variable : message clair, aucune exception au chargement', () => {
     const logger = { warn: jest.fn(), error: jest.fn() };
-    const { options } = require('../services/vertex').vertexClientOptions({}, logger);
+    const { options, configError } = require('../services/vertex').vertexClientOptions({}, logger);
     expect(options.googleAuthOptions.credentials).toBeUndefined();
+    expect(configError && configError.statusCode).toBe(503);
     expect(logger.warn.mock.calls.some((c) => /VERTEX_AI_CREDENTIALS/.test(c[0]))).toBe(true);
   });
   test('aucun fichier de clé dans le dépôt', () => {
