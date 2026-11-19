@@ -23,8 +23,19 @@ const callSchema = new mongoose.Schema({
   agent: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Agent",
-    required: true,
+    // Un appel écrit par le portail du centre (test, pris par un membre, ou non décroché) n'a pas d'agent HARX.
+    required: function () { return this.source !== 'center_portal' && !this.isTest && !(this.handledBy && this.handledBy.userId); },
   },
+  // Appels pris depuis le portail du centre (membre ou agent) ou appels de test : pas forcément un « rep » HARX.
+  handledBy: {
+    userId: { type: mongoose.Schema.Types.ObjectId, ref: "User", default: undefined },
+    name: { type: String, default: undefined },
+    role: { type: String, enum: ["member", "agent"], default: undefined },
+  },
+  isTest: { type: Boolean, default: false, index: true },
+  /** Provenance de l'enregistrement : `center_portal` = écrit par le portail Call Centre. */
+  source: { type: String, default: null },
+
   lead: {
     type: mongoose.Schema.Types.ObjectId,
     ref: "Lead",

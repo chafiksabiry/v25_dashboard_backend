@@ -21,11 +21,18 @@ router.get('/', phoneNumberController.getAllNumbers.bind(phoneNumberController))
 // Delete a phone number
 router.delete('/:id', phoneNumberController.deleteNumber.bind(phoneNumberController));
 
-// Check if a gig has an active number
-router.get('/gig/:gigId/check', phoneNumberController.checkGigNumber.bind(phoneNumberController));
-
-// Configure voice feature for a phone number
-router.post('/:phoneNumber/configure-voice', phoneNumberController.configureVoiceFeature.bind(phoneNumberController));
+// Routes du copilote REP retirées de ce service (410 Gone).
+// GET /gig/:gigId/check et POST /:phoneNumber/configure-voice étaient déclarées ici SANS authentification,
+// alors que configure-voice modifie la configuration voix d'une ligne. Aucun frontend n'appelle ces copies :
+// le copilote REP passe par l'orchestrateur (v25_comporchestrator_back), qui protège ses propres copies
+// avec src/middleware/copilotScope.js. Ce routeur n'est d'ailleurs pas monté dans src/app.js ; on répond 410
+// plutôt que de réexposer une version non protégée si quelqu'un le remontait un jour.
+const goneCopilotRoute = (req, res) => res.status(410).json({
+  success: false,
+  error: 'Gone: this route is served by the orchestrator (v25_comporchestrator_back) with authentication.'
+});
+router.get('/gig/:gigId/check', goneCopilotRoute);
+router.post('/:phoneNumber/configure-voice', goneCopilotRoute);
 
 // Webhook for Telnyx number order status updates
 // Middleware de logging pour le webhook

@@ -1,6 +1,14 @@
 const express = require('express');
 const mongoose = require('mongoose');
-const { config } = require('./config/env');
+const { config, assertRequiredEnv } = require('./config/env');
+
+// Aucun secret de repli : sans JWT_SECRET le service refuse de démarrer.
+try {
+  assertRequiredEnv();
+} catch (error) {
+  console.error(`❌ ${error.message}`);
+  process.exit(1);
+}
 const { connectDB } = require('./config/database');
 const { errorHandler } = require('./middleware/error');
 const { corsMiddleware, handleCorsError } = require('./middleware/cors');

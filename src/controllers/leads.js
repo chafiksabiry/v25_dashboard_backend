@@ -401,12 +401,14 @@ exports.getLeads = async (req, res) => {
     const limit = parseInt(req.query.limit) || 50;
     const skip = (page - 1) * limit;
 
-    const leads = await Lead.find()
+    // Jamais tous les prospects de toutes les entreprises : entreprise de l'appelant (middleware access.scopeToCallerCompany).
+    const filter = req.scopeCompanyId ? { companyId: new mongoose.Types.ObjectId(req.scopeCompanyId) } : {};
+    const leads = await Lead.find(filter)
       .populate("assignedTo")
       .skip(skip)
       .limit(limit);
 
-    const total = await Lead.countDocuments();
+    const total = await Lead.countDocuments(filter);
 
     res.status(200).json({
       success: true,
@@ -1011,7 +1013,8 @@ exports.getLeadsByPipelineAndStage = async (req, res) => {
     // Build the query
     const query = {
       Pipeline: pipeline,
-      Stage: stage
+      Stage: stage,
+      ...(req.scopeCompanyId ? { companyId: new mongoose.Types.ObjectId(req.scopeCompanyId) } : {})
     };
 
     // Get total count for pagination
@@ -1218,26 +1221,34 @@ exports.searchLeadsByGigId = async (req, res) => {
       });
     }
 
+    // The user's text is a literal, not a regex: escape it (an unescaped "(" used to make the query throw, and
+    // a crafted pattern could stall the database).
+    const literal = String(search).trim().slice(0, 100).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const matcher = { $regex: literal, $options: 'i' };
+    // Searching a company with hundreds of thousands of leads: return the most recent matches only.
+    const maxResults = Math.min(500, Math.max(1, parseInt(req.query.limit, 10) || 200));
+
     // Create search query for multiple fields
     const searchQuery = {
       gigId,
       archived: { $ne: true },
       $or: [
-        { Deal_Name: { $regex: search, $options: 'i' } },
-        { First_Name: { $regex: search, $options: 'i' } },
-        { Last_Name: { $regex: search, $options: 'i' } },
-        { Email_1: { $regex: search, $options: 'i' } },
-        { Phone: { $regex: search, $options: 'i' } },
-        { Pipeline: { $regex: search, $options: 'i' } },
-        { Stage: { $regex: search, $options: 'i' } },
-        { Activity_Tag: { $regex: search, $options: 'i' } },
-        { Address: { $regex: search, $options: 'i' } },
-        { Postal_Code: { $regex: search, $options: 'i' } },
-        { City: { $regex: search, $options: 'i' } }
+        { Deal_Name: matcher },
+        { First_Name: matcher },
+        { Last_Name: matcher },
+        { Email_1: matcher },
+        { Phone: matcher },
+        { Pipeline: matcher },
+        { Stage: matcher },
+        { Activity_Tag: matcher },
+        { Address: matcher },
+        { Postal_Code: matcher },
+        { City: matcher }
       ]
     };
 
-    // Get all matching leads without pagination
+    const totalMatches = await Lead.countDocuments(searchQuery);
+
     let leads = await Lead.find(searchQuery)
       .populate({
         path: 'assignedTo',
@@ -1246,6 +1257,7 @@ exports.searchLeadsByGigId = async (req, res) => {
       })
       .select('_id id Activity_Tag Deal_Name First_Name Last_Name Email_1 Address Postal_Code City Date_of_Birth Last_Activity_Time Phone Pipeline Stage refreshToken updatedAt Created_Time repDisposition gigId userId customFields')
       .sort({ updatedAt: -1 })
+      .limit(maxResults)
       .lean();
 
     leads = leads.map((lead) => {
@@ -1271,7 +1283,8 @@ exports.searchLeadsByGigId = async (req, res) => {
     res.status(200).json({
       success: true,
       count: leads.length,
-      total: leads.length,
+      total: totalMatches,
+      truncated: totalMatches > leads.length,
       searchQuery: search,
       data: leads
     });
